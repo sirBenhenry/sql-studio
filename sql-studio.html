@@ -764,8 +764,8 @@ footer p { margin: 0; }
 .tour-replay:hover { color: var(--accent); border-color: var(--accent); box-shadow: none; }
 .tour-replay.active { box-shadow: none; }
 .tour-actions { display: flex; align-items: center; gap: 8px; }
-.flag.now-btn { border-color: var(--accent); color: var(--accent); }
-.flag.now-btn:hover { background: var(--accent); color: #fff; }
+.flag.now-btn, .flag.lookup-btn { border-color: var(--accent); color: var(--accent); }
+.flag.now-btn:hover, .flag.lookup-btn:hover { background: var(--accent); color: #fff; }
 .extend-note b { color: var(--accent); }
 .extend-note button.linkish {
   background: none; border: 0; color: var(--accent); cursor: pointer;
@@ -2033,7 +2033,26 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     });
   }
 
-  /* INSERT — I = { table, cols:[names], rows:[ {colName: value} ] } */
+  /* FK-by-name lookup → (SELECT ret FROM table WHERE col = val [AND …]).
+     lk = { table, ret, matches:[{col,val}] }. Used for INSERT values and
+     conditions so you can reference a row by a human column, not its id. */
+  function pushLookup(push, lk, schema, p) {
+    push('(', '', p); push('SELECT', 'k', p); push(' ', '', p);
+    push(lk.ret || 'id', 'i', p); push(' ', '', p);
+    push('FROM', 'k', p); push(' ', '', p); push(lk.table, 'i', p);
+    const ms = (lk.matches || []).filter(m => m && m.col && String(m.val ?? '').trim() !== '');
+    if (ms.length) {
+      push(' ', '', p); push('WHERE', 'k', p);
+      ms.forEach((m, i) => {
+        if (i) { push(' ', '', p); push('AND', 'k', p); }
+        push(' ', '', p); push(m.col, 'i', p); push(' = ', 'k', p);
+        pushLiteral(push, m.val, colInfoOf(schema, lk.table, m.col), p);
+      });
+    }
+    push(')', '', p);
+  }
+
+  /* INSERT — I = { table, cols:[names], rows:[ {colName: value | {lookup}} ] } */
   function generateInsertSegments(I, schema) {
     const segs = [];
     const push = (t, c, p) => segs.push({ t, c: c || '', p: p || null });
@@ -2054,7 +2073,8 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       cols.forEach((c, ci) => {
         if (ci) push(', ', '', p);
         const raw = r ? r[c] : '';
-        if (raw == null || String(raw).trim() === '') push('DEFAULT', 'k', p);
+        if (raw && typeof raw === 'object' && raw.lookup) pushLookup(push, raw.lookup, schema, p);
+        else if (raw == null || String(raw).trim() === '') push('DEFAULT', 'k', p);
         else pushLiteral(push, raw, colInfoOf(schema, I.table, c), p);
       });
       push(')', '', p);
@@ -4087,15 +4107,38 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     const row = el('div', 'set-row');
     row.setAttribute('data-part', 'ins-row-' + ri);
     for (const name of I.cols) {
+      const info = colInfo(I.table, name);
+      const fk = fkOf(I.table, name);
+      const cell = r[name];
+
+      if (fk && cell && typeof cell === 'object' && cell.lookup) {
+        // FK set by name — show a summary chip, click to edit
+        const vals = (cell.lookup.matches || []).map(m => m.val).filter(Boolean).join(', ');
+        const chip = el('span', 'chip cat-cond', '🔎 ' + fk.refTable + ': ' + (vals || '…'));
+        chip.title = 'looking up ' + fk.refTable + ' by name — click to edit';
+        chip.addEventListener('click', () => popLookup(chip, fk.refTable, fk.refCol, cell.lookup, lk => { r[name] = { lookup: lk }; renderInsert(); }));
+        row.appendChild(chip);
+        const idBtn = el('button', 'iconbtn', 'id');
+        idBtn.title = 'enter the id directly instead';
+        idBtn.addEventListener('click', () => { r[name] = ''; renderInsert(); });
+        row.appendChild(idBtn);
+        continue;
+      }
+
       const inp = document.createElement('input');
       inp.type = 'text';
-      inp.value = r[name] != null ? r[name] : '';
-      inp.placeholder = name;
+      inp.value = (typeof cell === 'string' ? cell : '');
+      inp.placeholder = fk ? name + ' (id)' : name;
       inp.title = name;
       inp.addEventListener('input', () => { r[name] = inp.value; renderInsertSQL(); });
       row.appendChild(inp);
-      const info = colInfo(I.table, name);
-      if (info && isDateTimeType(info.type)) {
+
+      if (fk) {
+        const lookupBtn = el('button', 'flag lookup-btn', '🔎 by name');
+        lookupBtn.title = 'look up the ' + fk.refTable + ' row by a human column instead of its id';
+        lookupBtn.addEventListener('click', () => popLookup(lookupBtn, fk.refTable, fk.refCol, null, lk => { r[name] = { lookup: lk }; renderInsert(); }));
+        row.appendChild(lookupBtn);
+      } else if (info && isDateTimeType(info.type)) {
         row.appendChild(nowButton(() => info.type, v => { inp.value = v; r[name] = v; renderInsertSQL(); }));
       }
     }
@@ -4103,6 +4146,57 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     del.addEventListener('click', () => { I.rows.splice(ri, 1); if (!I.rows.length) I.rows = [{}]; renderInsert(); });
     row.appendChild(del);
     return row;
+  }
+
+  /* FK-by-name popover: match a referenced row by human column(s) → subquery */
+  function popLookup(anchor, refTable, refCol, current, onSave) {
+    openPop(anchor, 'Look up ' + refTable + ' by…', box => {
+      box.appendChild(el('p', 'hint', 'Match a row in ' + refTable + ' by a real column instead of typing its id — it compiles to a mini-query returning ' + refCol + '.'));
+      const firstCol = (colsOf(refTable)[0] || {}).name || '';
+      const lk = (current && current.matches && current.matches.length)
+        ? JSON.parse(JSON.stringify(current))
+        : { table: refTable, ret: refCol, matches: [{ col: firstCol, val: '' }] };
+      lk.table = refTable; lk.ret = refCol;
+
+      const list = el('div');
+      box.appendChild(list);
+      function render() {
+        list.textContent = '';
+        lk.matches.forEach((m, i) => {
+          const r = el('div', 'row');
+          if (i) r.appendChild(el('span', 'set-eq', 'and'));
+          const colSel = makeSelect(colsOf(refTable).map(c => ({ v: c.name, label: c.name })), m.col);
+          colSel.addEventListener('change', () => { m.col = colSel.value; });
+          const val = document.createElement('input');
+          val.type = 'text'; val.value = m.val || ''; val.placeholder = 'value';
+          val.addEventListener('input', () => { m.val = val.value; });
+          r.appendChild(fieldWrap('where', colSel));
+          r.appendChild(fieldWrap('=', val));
+          if (lk.matches.length > 1) {
+            const rm = el('button', 'iconbtn', '✕');
+            rm.addEventListener('click', () => { lk.matches.splice(i, 1); render(); });
+            r.appendChild(rm);
+          }
+          list.appendChild(r);
+        });
+      }
+      render();
+
+      const addBtn = el('button', 'btn small', '+ and');
+      addBtn.addEventListener('click', () => { lk.matches.push({ col: firstCol, val: '' }); render(); });
+      box.appendChild(addBtn);
+
+      const act = el('div', 'actions');
+      const save = el('button', 'btn small primary', 'Use this');
+      save.addEventListener('click', () => {
+        lk.matches = lk.matches.filter(m => m.col && String(m.val).trim() !== '');
+        if (!lk.matches.length) { toast('Enter at least one value to match on.'); return; }
+        onSave(lk);
+        closePop();
+      });
+      act.appendChild(save);
+      box.appendChild(act);
+    });
   }
 
   function renderInsertSQL() {
