@@ -755,8 +755,17 @@ footer p { margin: 0; }
   background: color-mix(in srgb, var(--ink) 10%, transparent);
   padding: 1px 6px; border-radius: 3px; font-size: .84em;
 }
+.lang-toggle {
+  margin-left: auto;
+  font-size: .72rem !important; font-weight: 700; letter-spacing: .06em;
+  color: var(--muted);
+  border: 1px solid var(--line); border-radius: 14px;
+  padding: 3px 12px !important; align-self: center;
+}
+.lang-toggle:hover { color: var(--accent); border-color: var(--accent); box-shadow: none; }
+.lang-toggle.active { box-shadow: none; }
 .tour-replay {
-  margin-left: auto; color: var(--muted); font-weight: 700;
+  margin-left: 10px; color: var(--muted); font-weight: 700;
   border: 1px solid var(--line); border-radius: 50%;
   width: 26px; height: 26px; padding: 0; align-self: center;
   font-size: .8rem; flex: 0 0 auto;
@@ -799,6 +808,7 @@ footer p { margin: 0; }
     <button id="tab-delete" class="mode-tab">DELETE <span>— remove data</span></button>
     <button id="tab-create" class="mode-tab">CREATE <span>— design tables</span></button>
     <button id="tab-alter" class="mode-tab">ALTER <span>— change tables</span></button>
+    <button id="lang-toggle" class="mode-tab lang-toggle" title="Switch between natural wording and SQL terms — same builder, two labelings">✨ Natural</button>
     <button id="tour-replay" class="mode-tab tour-replay" title="Replay the quick tour">?</button>
   </div>
 
@@ -985,13 +995,17 @@ footer p { margin: 0; }
   <div class="workbench" id="alter-section" hidden>
     <section class="card">
       <div class="step-head"><span class="step-badge">02</span><h2>Change the table structure</h2></div>
-      <p class="hint">Pick a table, then stack changes: add / drop / modify / rename a column, add or drop a foreign key, rename the table.</p>
+      <p class="hint">Pick a table and <b>edit it like you designed it</b> — rename it, rename columns, change types, add or remove columns.
+        The SQL is the <b>difference</b> between how the table was and how it looks now, so if you change something and change it back, nothing is emitted.</p>
       <div id="alter-lock" class="lock-note">⇧ Load a database in step 1 first (or hit the demo button).</div>
       <div id="alter-body">
         <div class="op-line"><span class="op-lead">ALTER TABLE</span>
-          <select id="alter-table" class="tbl-picker"></select></div>
-        <div id="alter-ops" style="margin-top:14px"></div>
-        <button class="btn small" id="btn-add-alter-op">+ change</button>
+          <select id="alter-table" class="tbl-picker"></select>
+          <button class="btn ghost small" id="btn-alter-reset">↺ back to original</button></div>
+        <div id="alter-designer" style="margin-top:14px"></div>
+        <label class="mini-label" style="margin-top:16px">foreign keys (extra changes)</label>
+        <div id="alter-ops"></div>
+        <button class="btn small" id="btn-add-alter-op">+ foreign key change</button>
       </div>
     </section>
     <section class="card sql-card">
@@ -1380,18 +1394,41 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
   };
 
   const AGG_FNS = {
-    COUNT: { phrase: 'the number of' },
-    SUM:   { phrase: 'the total' },
-    AVG:   { phrase: 'the average' },
-    MIN:   { phrase: 'the lowest' },
-    MAX:   { phrase: 'the highest' }
+    COUNT:   { phrase: 'the number of' },
+    COUNT_D: { phrase: 'the number of different' },
+    SUM:     { phrase: 'the total' },
+    AVG:     { phrase: 'the average' },
+    MIN:     { phrase: 'the lowest' },
+    MAX:     { phrase: 'the highest' }
   };
+
+  /* aggregate call — COUNT_D is the pseudo-fn for COUNT(DISTINCT col) */
+  function pushAggFn(push, fn, colText, p) {
+    if (fn === 'COUNT_D') {
+      push('COUNT', 'f', p); push('(', '', p);
+      push('DISTINCT', 'k', p); push(' ', '', p);
+      push(colText, 'i', p); push(')', '', p);
+    } else {
+      push(fn, 'f', p); push('(', '', p); push(colText, 'i', p); push(')', '', p);
+    }
+  }
 
   /* formula-column templates: exercise phrases → SQL expressions */
   const CALCS = {
     length:   { label: 'the number of letters in …', params: [] },
     sqrt:     { label: 'the square root of …', params: [] },
+    round:    { label: 'rounded to … decimals', params: ['n'] },
+    abs:      { label: 'the absolute value of …', params: [] },
+    upper:    { label: '… in UPPERCASE', params: [] },
+    lower:    { label: '… in lowercase', params: [] },
+    trim:     { label: '… without surrounding spaces', params: [] },
+    replace:  { label: 'replace text inside …', params: ['find', 'repl'] },
+    concat:   { label: 'combine two columns into one', params: ['sep', 'col2'] },
     month:    { label: 'the month name of …', params: [] },
+    yearOf:   { label: 'the year of …', params: [] },
+    monthOf:  { label: 'the month number of …', params: [] },
+    dayOf:    { label: 'the day of …', params: [] },
+    datediff: { label: 'the days between two dates', params: ['col2'] },
     firstn:   { label: 'the first … letters of …', params: ['n'] },
     before:   { label: 'the part of … before a character', params: ['ch'] },
     after:    { label: 'the part of … after a character', params: ['ch'] },
@@ -1404,7 +1441,18 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     if (it.alias) return it.alias.trim().replace(/\W+/g, '_');
     switch (it.fn) {
       case 'sqrt': return 'sqrt_' + it.col;
+      case 'round': return 'rounded_' + it.col;
+      case 'abs': return 'abs_' + it.col;
+      case 'upper': return 'upper_' + it.col;
+      case 'lower': return 'lower_' + it.col;
+      case 'trim': return 'trimmed_' + it.col;
+      case 'replace': return it.col + '_replaced';
+      case 'concat': return 'combined';
       case 'month': return 'month_name';
+      case 'yearOf': return 'year_' + it.col;
+      case 'monthOf': return 'month_' + it.col;
+      case 'dayOf': return 'day_' + it.col;
+      case 'datediff': return 'days_between';
       case 'length': return 'letters_in_' + it.col;
       case 'firstn': return 'first_letters';
       case 'before': return it.col + '_part1';
@@ -1426,6 +1474,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
   function aggAlias(item) {
     if (item.fn === 'COUNT' && item.col === '*') return 'amount';
+    if (item.fn === 'COUNT_D') return 'distinct_' + item.col;
     return item.fn.toLowerCase() + '_' + item.col;
   }
 
@@ -1504,6 +1553,39 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
           push(col, 'i', p); push(' ' + sym + ' ', '', p); push(String(it.n ?? 1), 'n', p);
           break;
         }
+        case 'round':
+          fnCall('ROUND', () => {
+            push(col, 'i', p); push(', ', '', p);
+            push(String(parseInt(it.n, 10) >= 0 ? parseInt(it.n, 10) : 2), 'n', p);
+          });
+          break;
+        case 'abs': fnCall('ABS', () => push(col, 'i', p)); break;
+        case 'upper': fnCall('UPPER', () => push(col, 'i', p)); break;
+        case 'lower': fnCall('LOWER', () => push(col, 'i', p)); break;
+        case 'trim': fnCall('TRIM', () => push(col, 'i', p)); break;
+        case 'replace':
+          fnCall('REPLACE', () => {
+            push(col, 'i', p); push(', ', '', p);
+            push("'" + escStr(it.find ?? '') + "'", 's', p); push(', ', '', p);
+            push("'" + escStr(it.repl ?? '') + "'", 's', p);
+          });
+          break;
+        case 'concat':
+          fnCall('CONCAT', () => {
+            push(col, 'i', p); push(', ', '', p);
+            push("'" + escStr(it.sep ?? ' ') + "'", 's', p); push(', ', '', p);
+            push(qn(it.table2, it.col2), 'i', p);
+          });
+          break;
+        case 'yearOf': fnCall('YEAR', () => push(col, 'i', p)); break;
+        case 'monthOf': fnCall('MONTH', () => push(col, 'i', p)); break;
+        case 'dayOf': fnCall('DAY', () => push(col, 'i', p)); break;
+        case 'datediff':
+          fnCall('DATEDIFF', () => {
+            push(col, 'i', p); push(', ', '', p);
+            push(qn(it.table2, it.col2), 'i', p);
+          });
+          break;
       }
       push(' ', '', p); push('AS', 'k', p); push(' ', '', p); push(calcAlias(it), 'i', p);
     }
@@ -1526,7 +1608,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       push('SELECT', 'k', p);
       push(' ', '', p);
       if (sub.fn) {
-        push(sub.fn, 'f', p); push('(', '', p); push(sub.col, 'i', p); push(')', '', p);
+        pushAggFn(push, sub.fn, sub.col, p);
       } else {
         push(sub.col, 'i', p);
       }
@@ -1597,10 +1679,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       } else if (it.kind === 'calc') {
         pushCalc(it, p);
       } else { // agg
-        push(it.fn, 'f', p);
-        push('(', '', p);
-        push(it.col === '*' ? '*' : qn(it.table, it.col), 'i', p);
-        push(')', '', p);
+        pushAggFn(push, it.fn, it.col === '*' ? '*' : qn(it.table, it.col), p);
         push(' ', '', p);
         push('AS', 'k', p);
         push(' ', '', p);
@@ -1644,7 +1723,12 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         push(qn(w.table, w.col), 'i', p);
         const op = OPS[w.op];
         const info = colInfo(w.table, w.col);
-        if (op.kind === 'scalar' && w.src === 'column') {
+        if (w.src === 'lookup' && w.lookup) {
+          // FK-by-name: col IN (SELECT ret FROM ref WHERE human = val …)
+          push(' ', '', p);
+          push('IN', 'k', p); push(' ', '', p);
+          pushLookup(push, w.lookup, schema, p);
+        } else if (op.kind === 'scalar' && w.src === 'column') {
           push(' ' + op.sql + ' ', 'k', p);
           push(qn(w.cmpTable, w.cmpCol), 'i', p);
         } else if (op.kind === 'scalar' && w.src === 'sub') {
@@ -1683,10 +1767,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
           push(h.conj || 'AND', 'k', 'hconj-' + i);
         }
         push(' ', '', p);
-        push(h.fn, 'f', p);
-        push('(', '', p);
-        push(h.col ? qn(h.col.table, h.col.col) : '*', 'i', p);
-        push(')', '', p);
+        pushAggFn(push, h.fn, h.col ? qn(h.col.table, h.col.col) : '*', p);
         const op = OPS[h.op] || OPS.gte;
         push(' ' + op.sql + ' ', 'k', p);
         if (h.src === 'sub' && h.sub) {
@@ -1909,6 +1990,24 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         push(' ', '', p); push('DEFAULT', 'k', p); push(' ', '', p);
         pushDefault(c.def, p);
       }
+      // allowed range → CHECK constraint (MySQL 8.0.16+ / MariaDB 10.2+)
+      const hasMin = (c.chkMin ?? '') !== '' && String(c.chkMin).trim() !== '';
+      const hasMax = (c.chkMax ?? '') !== '' && String(c.chkMax).trim() !== '';
+      if (hasMin || hasMax) {
+        push(' ', '', p); push('CHECK', 'k', p); push(' (', '', p);
+        push(colName(t, j), 'i', p);
+        if (hasMin && hasMax) {
+          push(' ', '', p); push('BETWEEN', 'k', p); push(' ', '', p);
+          pushDefault(String(c.chkMin).trim(), p);
+          push(' ', '', p); push('AND', 'k', p); push(' ', '', p);
+          pushDefault(String(c.chkMax).trim(), p);
+        } else if (hasMin) {
+          push(' >= ', 'k', p); pushDefault(String(c.chkMin).trim(), p);
+        } else {
+          push(' <= ', 'k', p); pushDefault(String(c.chkMax).trim(), p);
+        }
+        push(')', '', p);
+      }
     }
 
     function pushFk(t, c, j, p) {
@@ -2070,7 +2169,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
      → (SELECT [FN(]col[)] FROM table [WHERE cCol op cVal]) */
   function pushMiniQuery(push, sub, schema, p) {
     push('(', '', p); push('SELECT', 'k', p); push(' ', '', p);
-    if (sub.fn) { push(sub.fn, 'f', p); push('(', '', p); push(sub.col, 'i', p); push(')', '', p); }
+    if (sub.fn) pushAggFn(push, sub.fn, sub.col, p);
     else push(sub.col, 'i', p);
     push(' ', '', p); push('FROM', 'k', p); push(' ', '', p); push(sub.table, 'i', p);
     if (sub.hasCond && sub.cCol && sub.cOp) {
@@ -2182,7 +2281,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     const push = (t, c, p) => segs.push({ t, c: c || '', p: p || null });
     if (!A.table) { push('-- Pick a table to change…', 'c'); return segs; }
     const ops = A.ops || [];
-    if (!ops.length) { push('-- Add a change (ADD / DROP / MODIFY / RENAME)…', 'c'); return segs; }
+    if (!ops.length) { push('-- No changes yet — edit the table on the left;\n-- the SQL here is the before → after difference.', 'c'); return segs; }
 
     ops.forEach((op, i) => {
       const p = 'alt-' + i;
@@ -2248,6 +2347,83 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
   'use strict';
 
   const { OPS, AGG_FNS, CALCS, aggAlias, calcAlias, generateSegments, generateCreateSegments, generateInsertSegments, generateUpdateSegments, generateDeleteSegments, generateAlterSegments, segmentsToText, renderSegments, highlightStatic } = window.SqlGen;
+
+  /* ================================================================
+     Natural ↔ Plain (SQL) language layer.
+     ONE builder — the toggle only changes how the pieces are labeled:
+     Natural reads like a sentence, Plain wears the real SQL terms.
+     ================================================================ */
+
+  let LANG = 'natural';
+  try { LANG = localStorage.getItem('selectstudio.lang') === 'plain' ? 'plain' : 'natural'; } catch (e) { /* ignore */ }
+
+  const STR = {
+    natural: {
+      'bank.pickTable': '⬚ pick your table', 'bank.changeTable': '⇄ change table',
+      'bank.columns': '+ columns', 'bank.agg': '+ count / total / average',
+      'bank.calc': '+ formula (√, split, letters…)', 'bank.join': '+ related table (join)',
+      'bank.condition': '+ condition', 'bank.group': '+ for each… (group by)',
+      'bank.sort': '+ sorting (order by)', 'bank.limit': '+ limit', 'bank.limitEdit': 'limit',
+      'bank.distinct': 'no duplicates (distinct)',
+      's.show': 'Show me', 's.from': 'from', 's.join': 'together with', 's.where': 'where',
+      's.foreach': ', for each', 's.having': ', keeping only groups where',
+      's.sorted': ', sorted by', 's.thenby': 'then by', 's.limit': ', but only the first',
+      's.and': 'and', 's.dot': '.', 's.distinct': 'without duplicates', 's.everything': 'everything ( * )',
+      'w.update': 'change rows in', 'w.delete': 'remove rows from', 'w.insert': 'add rows to',
+      'w.alter': 'change the structure of',
+      'w.set': 'set new values', 'w.where': 'only where (condition)',
+      'w.cols': 'columns to fill', 'w.rows': 'rows'
+    },
+    plain: {
+      'bank.pickTable': '⬚ FROM …', 'bank.changeTable': '⇄ FROM',
+      'bank.columns': '+ SELECT columns', 'bank.agg': '+ COUNT / SUM / AVG',
+      'bank.calc': '+ expression', 'bank.join': '+ JOIN',
+      'bank.condition': '+ WHERE / HAVING', 'bank.group': '+ GROUP BY',
+      'bank.sort': '+ ORDER BY', 'bank.limit': '+ LIMIT', 'bank.limitEdit': 'LIMIT',
+      'bank.distinct': 'DISTINCT',
+      's.show': 'SELECT', 's.from': 'FROM', 's.join': 'JOIN', 's.where': 'WHERE',
+      's.foreach': 'GROUP BY', 's.having': 'HAVING',
+      's.sorted': 'ORDER BY', 's.thenby': ',', 's.limit': 'LIMIT',
+      's.and': 'AND', 's.dot': ';', 's.distinct': 'DISTINCT', 's.everything': '*',
+      'w.update': 'UPDATE', 'w.delete': 'DELETE FROM', 'w.insert': 'INSERT INTO',
+      'w.alter': 'ALTER TABLE',
+      'w.set': 'SET', 'w.where': 'WHERE',
+      'w.cols': '( columns )', 'w.rows': 'VALUES'
+    }
+  };
+
+  function t(key) { return (STR[LANG] && STR[LANG][key]) || STR.natural[key] || key; }
+
+  /* operator label: natural phrase vs SQL-ish form */
+  const OP_PLAIN = {
+    eq: '=', neq: '<>', gt: '>', lt: '<', gte: '>=', lte: '<=',
+    contains: "LIKE '%…%'", starts: "LIKE '…%'", ends: "LIKE '%…'",
+    lenIs: "LIKE '___'  (length)", nthIs: 'LIKE  (nth letter)', nthLastIs: 'LIKE  (nth-last letter)',
+    between: 'BETWEEN', in: 'IN (…)', nin: 'NOT IN (…)', isnull: 'IS NULL', notnull: 'IS NOT NULL'
+  };
+  function opLabel(k) { return LANG === 'plain' ? (OP_PLAIN[k] || OPS[k].phrase) : OPS[k].phrase; }
+
+  /* static labels in the write-mode sections */
+  function applyLangStatic() {
+    const set = (sel, key) => { const n = document.querySelector(sel); if (n) n.textContent = t(key); };
+    set('#update-section .op-lead', 'w.update');
+    set('#delete-section .op-lead', 'w.delete');
+    set('#insert-section .op-lead', 'w.insert');
+    set('#alter-section .op-lead', 'w.alter');
+    const labs = (sec) => document.querySelectorAll('#' + sec + ' .mini-label');
+    const u = labs('update-section'); if (u[0]) u[0].textContent = t('w.set'); if (u[1]) u[1].textContent = t('w.where');
+    const d = labs('delete-section'); if (d[0]) d[0].textContent = t('w.where');
+    const ins = labs('insert-section'); if (ins[0]) ins[0].textContent = t('w.cols'); if (ins[1]) ins[1].textContent = t('w.rows');
+    const tog = document.querySelector('#lang-toggle');
+    if (tog) tog.textContent = LANG === 'plain' ? '⟨/⟩ SQL' : '✨ Natural';
+  }
+
+  function setLang(l) {
+    LANG = l === 'plain' ? 'plain' : 'natural';
+    try { localStorage.setItem('selectstudio.lang', LANG); } catch (e) { /* ignore */ }
+    applyLangStatic();
+    renderAll();
+  }
 
   /* ---------------- state ---------------- */
 
@@ -2373,6 +2549,17 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       case 'initials': return 'the initials of ' + c + ' + ' + colLabel(it.table2, it.col2);
       case 'vat': return 'the ' + (Number(it.n) || 8) + '% tax inside ' + c + (it.round5 ? ' (5-cent rounded)' : '');
       case 'math': return c + ' ' + ({ plus: '+', minus: '−', times: '×', div: '÷' }[it.mop] || '×') + ' ' + (it.n ?? 1);
+      case 'round': return c + ' rounded to ' + (parseInt(it.n, 10) >= 0 ? it.n : 2) + ' decimals';
+      case 'abs': return 'the absolute value of ' + c;
+      case 'upper': return c + ' in UPPERCASE';
+      case 'lower': return c + ' in lowercase';
+      case 'trim': return c + ' without surrounding spaces';
+      case 'replace': return c + ' with "' + (it.find ?? '') + '" → "' + (it.repl ?? '') + '"';
+      case 'concat': return c + ' + ' + colLabel(it.table2, it.col2) + ' combined';
+      case 'yearOf': return 'the year of ' + c;
+      case 'monthOf': return 'the month number of ' + c;
+      case 'dayOf': return 'the day of ' + c;
+      case 'datediff': return 'the days between ' + c + ' and ' + colLabel(it.table2, it.col2);
       default: return 'formula';
     }
   }
@@ -2409,6 +2596,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       if (!okCol(w.table, w.col)) return false;
       if (w.src === 'column' && !okCol(w.cmpTable, w.cmpCol)) return false;
       if (w.src === 'sub' && (!w.sub || !schema.byName[w.sub.table] || !colInfo(w.sub.table, w.sub.col))) return false;
+      if (w.src === 'lookup' && (!w.lookup || !schema.byName[w.lookup.table])) return false;
       return true;
     });
 
@@ -2726,6 +2914,25 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
           paramArea.appendChild(r);
           collectors.push(() => { it.ch = chIn.value || '@'; });
         }
+        if (params.includes('find')) {
+          const fIn = document.createElement('input');
+          fIn.type = 'text'; fIn.value = it.find || '';
+          const rIn = document.createElement('input');
+          rIn.type = 'text'; rIn.value = it.repl || '';
+          const r = el('div', 'row');
+          r.appendChild(fieldWrap('find this text', fIn));
+          r.appendChild(fieldWrap('replace with', rIn));
+          paramArea.appendChild(r);
+          collectors.push(() => { it.find = fIn.value; it.repl = rIn.value; });
+        }
+        if (params.includes('sep')) {
+          const sIn = document.createElement('input');
+          sIn.type = 'text'; sIn.maxLength = 5; sIn.value = it.sep != null ? it.sep : ' ';
+          const r = el('div', 'row');
+          r.appendChild(fieldWrap('separator between them', sIn));
+          paramArea.appendChild(r);
+          collectors.push(() => { it.sep = sIn.value; });
+        }
         if (params.includes('col2')) {
           const col2Sel = queryColSelect(it.table2 && it.col2 ? it.table2 + '|' + it.col2 : null);
           const r = el('div', 'row');
@@ -2872,7 +3079,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     sb.appendChild(chk);
 
     const fOp = makeSelect(
-      ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'contains'].map(k => ({ v: k, label: OPS[k].phrase })),
+      ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'contains'].map(k => ({ v: k, label: opLabel(k) })),
       host.sub.cOp || 'eq');
     const fVal = document.createElement('input');
     fVal.type = 'text';
@@ -2894,7 +3101,56 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     return sb;
   }
 
-  /* ----- condition (WHERE) — the big one ----- */
+  /* Inline FK-by-name form (embedded in the condition dialog).
+     host.lookup = {table, ret, matches:[{col,val}]}; call _collect() to save. */
+  function makeLookupForm(host, refTable, refCol) {
+    const wrap = el('div', 'sub-box');
+    wrap.appendChild(el('h5', null, 'match ' + refTable + ' by…'));
+    const firstCol = (colsOf(refTable)[0] || {}).name || '';
+    const lk = (host.lookup && host.lookup.matches && host.lookup.matches.length)
+      ? JSON.parse(JSON.stringify(host.lookup))
+      : { table: refTable, ret: refCol, matches: [{ col: firstCol, val: '' }] };
+    lk.table = refTable; lk.ret = refCol;
+
+    const list = el('div');
+    wrap.appendChild(list);
+    function render() {
+      list.textContent = '';
+      lk.matches.forEach((m, i) => {
+        const r = el('div', 'row');
+        if (i) r.appendChild(el('span', 'set-eq', 'and'));
+        const colSel = makeSelect(colsOf(refTable).map(c => ({ v: c.name, label: c.name })), m.col);
+        colSel.addEventListener('change', () => { m.col = colSel.value; });
+        const val = document.createElement('input');
+        val.type = 'text'; val.value = m.val || ''; val.placeholder = 'value';
+        val.addEventListener('input', () => { m.val = val.value; });
+        r.appendChild(fieldWrap('where', colSel));
+        r.appendChild(fieldWrap('=', val));
+        if (lk.matches.length > 1) {
+          const rm = el('button', 'iconbtn', '✕');
+          rm.addEventListener('click', () => { lk.matches.splice(i, 1); render(); });
+          r.appendChild(rm);
+        }
+        list.appendChild(r);
+      });
+    }
+    render();
+    const addBtn = el('button', 'btn small', '+ and');
+    addBtn.addEventListener('click', () => { lk.matches.push({ col: firstCol, val: '' }); render(); });
+    wrap.appendChild(addBtn);
+
+    wrap._collect = () => {
+      lk.matches = lk.matches.filter(m => m.col && String(m.val).trim() !== '');
+      host.lookup = lk;
+      return lk.matches.length > 0;
+    };
+    return wrap;
+  }
+
+  /* ----- THE condition — one dialog for everything that filters.
+     Left side is a column (→ WHERE) or a calculation (→ HAVING, with
+     inline grouping). Right side: value · another column · mini-query ·
+     FK-by-name lookup. ----- */
   function popCondition(anchor, editIdx) {
     const isEdit = editIdx != null;
     const w = isEdit
@@ -2906,30 +3162,157 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       w.col = colsOf(t)[0] ? colsOf(t)[0].name : null;
     }
     const idxForConj = isEdit ? editIdx : Q.where.length;
+    let ckind = 'col'; // 'col' → WHERE, 'calc' → HAVING
 
     openPop(anchor, isEdit ? 'Edit condition' : 'Add a condition', box => {
 
+      if (!isEdit) {
+        box.appendChild(el('label', null, 'the left side is'));
+        box.appendChild(radioRow('ckind', [
+          { v: 'col', label: 'a column' },
+          { v: 'calc', label: 'a calculation (avg, count…)' }
+        ], ckind, v => { ckind = v; renderKind(); }));
+        box.appendChild(el('div')).style.height = '8px';
+      }
+
+      const kindArea = el('div');
+      box.appendChild(kindArea);
+      const act = el('div', 'actions');
+      box.appendChild(act);
+
+      function renderKind() {
+        kindArea.textContent = '';
+        act.textContent = '';
+        if (ckind === 'calc') buildCalcBody(kindArea, act);
+        else buildColumnBody(kindArea, act);
+      }
+
+      /* ============ calculation side (→ HAVING + inline grouping) ============ */
+      function buildCalcBody(body, actions) {
+        const h = { conj: 'AND', fn: 'AVG', col: null, op: 'gt', src: 'sub', value: '', sub: null, mode: 'compare' };
+
+        const fnSel = makeSelect(
+          Object.keys(AGG_FNS).map(fn => ({ v: fn, label: AGG_FNS[fn].phrase + '…  (' + fn + ')' })), h.fn);
+        const colSel2 = document.createElement('select');
+        function fillCols() {
+          colSel2.textContent = '';
+          if (fnSel.value === 'COUNT') {
+            const o = document.createElement('option');
+            o.value = '*|*'; o.textContent = 'rows  (*)';
+            colSel2.appendChild(o);
+          }
+          for (const t of tablesInQuery()) {
+            const g = document.createElement('optgroup');
+            g.label = t;
+            for (const c of colsOf(t)) {
+              const o = document.createElement('option');
+              o.value = t + '|' + c.name; o.textContent = c.name;
+              g.appendChild(o);
+            }
+            colSel2.appendChild(g);
+          }
+          if (fnSel.value === 'COUNT') colSel2.value = '*|*';
+        }
+        fillCols();
+        fnSel.addEventListener('change', fillCols);
+
+        const r1 = el('div', 'row');
+        r1.appendChild(fieldWrap('the calculation', fnSel));
+        r1.appendChild(fieldWrap('of', colSel2));
+        body.appendChild(r1);
+
+        // inline grouping
+        const grpCols = [];
+        for (const t of tablesInQuery()) for (const c of colsOf(t)) grpCols.push({ v: t + '|' + c.name, label: c.name + '  (' + t + ')' });
+        const grpSel = makeSelect(grpCols, Q.groupBy.length ? Q.groupBy[0].table + '|' + Q.groupBy[0].col : (grpCols[0] && grpCols[0].v));
+        const grpLine = el('div', 'checkline');
+        const grpCb = document.createElement('input');
+        grpCb.type = 'checkbox';
+        grpCb.checked = true;
+        grpLine.appendChild(grpCb);
+        grpLine.appendChild(document.createTextNode(' computed for each'));
+        body.appendChild(grpLine);
+        const grpRow = el('div', 'row');
+        grpRow.appendChild(fieldWrap('group', grpSel));
+        body.appendChild(grpRow);
+        const syncGrp = () => { grpRow.style.display = grpCb.checked ? 'flex' : 'none'; };
+        grpCb.addEventListener('change', syncGrp);
+        syncGrp();
+
+        const opSel2 = makeSelect(
+          ['gt', 'gte', 'lt', 'lte', 'eq', 'neq'].map(k => ({ v: k, label: opLabel(k) })), h.op);
+        const r2 = el('div', 'row');
+        r2.appendChild(fieldWrap('is', opSel2));
+        body.appendChild(r2);
+
+        body.appendChild(el('label', null, 'compare with'));
+        body.appendChild(radioRow('hsrc-u', [
+          { v: 'value', label: 'a value' }, { v: 'sub', label: 'a mini-query' }
+        ], h.src, v => { h.src = v; renderRhs(); }));
+
+        const rhsArea = el('div');
+        body.appendChild(rhsArea);
+        const val = document.createElement('input');
+        val.type = 'text';
+        let collectRhs = () => {};
+        function renderRhs() {
+          rhsArea.textContent = '';
+          if (h.src === 'sub') {
+            const sb = makeSubForm(h, true);
+            rhsArea.appendChild(sb);
+            collectRhs = () => sb._collect();
+          } else {
+            const r = el('div', 'row');
+            r.appendChild(fieldWrap('value', val));
+            rhsArea.appendChild(r);
+            collectRhs = () => { h.value = val.value; };
+          }
+        }
+        renderRhs();
+
+        const btn2 = el('button', 'btn small primary', 'Add');
+        btn2.addEventListener('click', () => {
+          if (h.src === 'value' && !val.value.trim()) { toast('Please enter a value.'); return; }
+          h.fn = fnSel.value;
+          h.op = opSel2.value;
+          collectRhs();
+          const [t, c] = colSel2.value.split('|');
+          h.col = t === '*' ? null : { table: t, col: c };
+          if (grpCb.checked && grpSel.value) {
+            const [gt, gc] = grpSel.value.split('|');
+            if (!Q.groupBy.some(g => g.table === gt && g.col === gc)) Q.groupBy.push({ table: gt, col: gc });
+          }
+          Q.having.push(h);
+          closePop();
+          commit();
+        });
+        actions.appendChild(btn2);
+      }
+
+      /* ============ column side (→ WHERE) ============ */
+      function buildColumnBody(body, actions) {
+
       if (idxForConj > 0) {
-        box.appendChild(radioRow('conj', [
+        body.appendChild(radioRow('conj', [
           { v: 'AND', label: 'and (both must be true)' },
           { v: 'OR', label: 'or (either is enough)' }
         ], w.conj || 'AND', v => { w.conj = v; }));
-        box.appendChild(el('div')).style.height = '6px';
+        body.appendChild(el('div')).style.height = '6px';
       }
 
       const colSel = queryColSelect(w.table + '|' + w.col);
       const opSel = makeSelect(
-        Object.keys(OPS).map(k => ({ v: k, label: OPS[k].phrase })), w.op);
+        Object.keys(OPS).map(k => ({ v: k, label: opLabel(k) })), w.op);
 
       const row1 = el('div', 'row');
       row1.appendChild(fieldWrap('the column', colSel));
       row1.appendChild(fieldWrap('…', opSel));
-      box.appendChild(row1);
+      body.appendChild(row1);
 
       const srcArea = el('div');
       const valArea = el('div');
-      box.appendChild(srcArea);
-      box.appendChild(valArea);
+      body.appendChild(srcArea);
+      body.appendChild(valArea);
 
       const subForm = scalar => makeSubForm(w, scalar);
 
@@ -2943,11 +3326,15 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
         if (kind === 'null') return;
 
+        const [ct, cc] = colSel.value.split('|');
+        const fk = fkOf(ct, cc);
+
         // choose the source of the comparison value
         if (kind === 'scalar' || kind === 'set') {
           const opts = kind === 'scalar'
             ? [{ v: 'value', label: 'a value' }, { v: 'column', label: 'another column' }, { v: 'sub', label: 'a mini-query' }]
             : [{ v: 'value', label: 'a list of values' }, { v: 'sub', label: 'a mini-query' }];
+          if (fk) opts.push({ v: 'lookup', label: 'a ' + fk.refTable + ' looked up by name' });
           if (!opts.some(o => o.v === w.src)) w.src = 'value';
           srcArea.appendChild(el('label', null, 'compare with'));
           srcArea.appendChild(radioRow('src', opts, w.src, v => { w.src = v; renderValArea(); }));
@@ -2956,7 +3343,11 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
           w.src = 'value';
         }
 
-        if (w.src === 'column' && kind === 'scalar') {
+        if (w.src === 'lookup' && fk) {
+          const lf = makeLookupForm(w, fk.refTable, fk.refCol);
+          valArea.appendChild(lf);
+          collectVal = () => lf._collect();
+        } else if (w.src === 'column' && kind === 'scalar') {
           const cmp = queryColSelect(w.cmpTable && w.cmpCol ? w.cmpTable + '|' + w.cmpCol : null);
           const r = el('div', 'row');
           r.appendChild(fieldWrap('other column', cmp));
@@ -3030,25 +3421,31 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       btn.addEventListener('click', () => {
         const [t, c] = colSel.value.split('|');
         w.table = t; w.col = c; w.op = opSel.value;
-        collectVal();
+        const ok = collectVal();
         const kind = OPS[w.op].kind;
-        const needsVal = kind !== 'null' && w.src === 'value';
-        if (needsVal && !String(w.v1 || '').trim()) { toast('Please enter a value.'); return; }
-        if (kind === 'between' && !String(w.v2 || '').trim()) { toast('Please fill in both ends of the range.'); return; }
-        if ((kind === 'pnth' || kind === 'pnthlast') && !String(w.v2 || '').trim()) { toast('Please enter the letter.'); return; }
+        if (w.src === 'lookup') {
+          if (ok === false) { toast('Enter at least one value to match on.'); return; }
+        } else {
+          delete w.lookup;
+          const needsVal = kind !== 'null' && w.src === 'value';
+          if (needsVal && !String(w.v1 || '').trim()) { toast('Please enter a value.'); return; }
+          if (kind === 'between' && !String(w.v2 || '').trim()) { toast('Please fill in both ends of the range.'); return; }
+          if ((kind === 'pnth' || kind === 'pnthlast') && !String(w.v2 || '').trim()) { toast('Please enter the letter.'); return; }
+        }
         if (isEdit) Q.where[editIdx] = w;
         else Q.where.push(w);
         closePop();
         commit();
       });
-      const act = el('div', 'actions');
       if (isEdit) {
         const rm = el('button', 'btn small', '✕ Remove');
         rm.addEventListener('click', () => { Q.where.splice(editIdx, 1); closePop(); commit(); });
-        act.appendChild(rm);
+        actions.appendChild(rm);
       }
-      act.appendChild(btn);
-      box.appendChild(act);
+      actions.appendChild(btn);
+      } // end buildColumnBody
+
+      renderKind();
     });
   }
 
@@ -3160,7 +3557,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
       /* ----- operator ----- */
       const opSel = makeSelect(
-        ['gt', 'gte', 'lt', 'lte', 'eq', 'neq'].map(k => ({ v: k, label: OPS[k].phrase })), h.op);
+        ['gt', 'gte', 'lt', 'lte', 'eq', 'neq'].map(k => ({ v: k, label: opLabel(k) })), h.op);
       const r2 = el('div', 'row');
       r2.appendChild(fieldWrap('is', opSel));
       box.appendChild(r2);
@@ -3223,111 +3620,6 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     });
   }
 
-  /* ----- classic HAVING — filter groups you already grouped (no inline grouping) ----- */
-  function popHaving(anchor, editIdx) {
-    const isEdit = editIdx != null;
-    const h = isEdit
-      ? JSON.parse(JSON.stringify(Q.having[editIdx]))
-      : { conj: 'AND', fn: 'COUNT', col: null, op: 'gte', src: 'value', value: '', sub: null, mode: 'classic' };
-    if (!h.src) h.src = 'value';
-    h.mode = 'classic';
-    const idxForConj = isEdit ? editIdx : Q.having.length;
-
-    openPop(anchor, isEdit ? 'Edit group filter' : 'Keep only groups where…', box => {
-      if (idxForConj > 0) {
-        box.appendChild(radioRow('hconj2', [
-          { v: 'AND', label: 'and' }, { v: 'OR', label: 'or' }
-        ], h.conj || 'AND', v => { h.conj = v; }));
-      }
-
-      const fnSel = makeSelect(
-        Object.keys(AGG_FNS).map(fn => ({ v: fn, label: AGG_FNS[fn].phrase + '…  (' + fn + ')' })), h.fn);
-
-      const colSel = document.createElement('select');
-      function fillCols() {
-        colSel.textContent = '';
-        if (fnSel.value === 'COUNT') {
-          const o = document.createElement('option');
-          o.value = '*|*'; o.textContent = 'rows  (*)';
-          colSel.appendChild(o);
-        }
-        for (const t of tablesInQuery()) {
-          const g = document.createElement('optgroup');
-          g.label = t;
-          for (const c of colsOf(t)) {
-            const o = document.createElement('option');
-            o.value = t + '|' + c.name; o.textContent = c.name;
-            g.appendChild(o);
-          }
-          colSel.appendChild(g);
-        }
-        if (h.col) colSel.value = h.col.table + '|' + h.col.col;
-        else if (fnSel.value === 'COUNT') colSel.value = '*|*';
-      }
-      fillCols();
-      fnSel.addEventListener('change', fillCols);
-
-      const opSel = makeSelect(
-        ['gte', 'gt', 'eq', 'neq', 'lt', 'lte'].map(k => ({ v: k, label: OPS[k].phrase })), h.op);
-
-      const r1 = el('div', 'row');
-      r1.appendChild(fieldWrap('the calculation', fnSel));
-      r1.appendChild(fieldWrap('of', colSel));
-      box.appendChild(r1);
-      const r2 = el('div', 'row');
-      r2.appendChild(fieldWrap('is', opSel));
-      box.appendChild(r2);
-
-      box.appendChild(el('label', null, 'compare with'));
-      box.appendChild(radioRow('hsrc2', [
-        { v: 'value', label: 'a value' }, { v: 'sub', label: 'a mini-query' }
-      ], h.src, v => { h.src = v; renderRhs(); }));
-
-      const rhsArea = el('div');
-      box.appendChild(rhsArea);
-      const val = document.createElement('input');
-      val.type = 'text'; val.value = h.value || '';
-      let collectRhs = () => {};
-
-      function renderRhs() {
-        rhsArea.textContent = '';
-        if (h.src === 'sub') {
-          const sb = makeSubForm(h, true);
-          rhsArea.appendChild(sb);
-          collectRhs = () => sb._collect();
-        } else {
-          const r = el('div', 'row');
-          r.appendChild(fieldWrap('value', val));
-          rhsArea.appendChild(r);
-          collectRhs = () => { h.value = val.value; };
-          val.addEventListener('keydown', e => { if (e.key === 'Enter') btn.click(); });
-        }
-      }
-      renderRhs();
-
-      const btn = el('button', 'btn small primary', isEdit ? 'Save' : 'Add');
-      btn.addEventListener('click', () => {
-        if (h.src === 'value' && !val.value.trim()) { toast('Please enter a value.'); return; }
-        h.fn = fnSel.value;
-        h.op = opSel.value;
-        collectRhs();
-        const [t, c] = colSel.value.split('|');
-        h.col = t === '*' ? null : { table: t, col: c };
-        if (isEdit) Q.having[editIdx] = h;
-        else Q.having.push(h);
-        closePop();
-        commit();
-      });
-      const act = el('div', 'actions');
-      if (isEdit) {
-        const rm = el('button', 'btn small', '✕ Remove');
-        rm.addEventListener('click', () => { Q.having.splice(editIdx, 1); closePop(); commit(); });
-        act.appendChild(rm);
-      }
-      act.appendChild(btn);
-      box.appendChild(act);
-    });
-  }
 
   /* ----- ORDER BY ----- */
   function popSort(anchor, editIdx) {
@@ -3444,20 +3736,43 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
   function condLabel(w) {
     const op = OPS[w.op];
-    if (op.kind === 'plen') return colLabel(w.table, w.col) + ' has exactly ' + (w.v1 || '?') + ' letters';
-    if (op.kind === 'pnth') return 'the ' + ord(w.v1) + ' letter of ' + colLabel(w.table, w.col) + ' is "' + (w.v2 || '') + '"';
-    if (op.kind === 'pnthlast') return 'the ' + ord(w.v1) + '-last letter of ' + colLabel(w.table, w.col) + ' is "' + (w.v2 || '') + '"';
+    const col = colLabel(w.table, w.col);
+
+    if (w.src === 'lookup' && w.lookup) {
+      const ms = (w.lookup.matches || []).map(m => m.col + (LANG === 'plain' ? ' = ' : ' is ') + m.val)
+        .join(LANG === 'plain' ? ' AND ' : ' and ');
+      return LANG === 'plain'
+        ? col + ' IN (' + w.lookup.table + ': ' + ms + ')'
+        : col + ' is the ' + w.lookup.table + ' where ' + ms;
+    }
+
+    if (LANG === 'plain') {
+      // SQL-shaped reading of the same condition
+      if (op.kind === 'null') return col + ' ' + op.sql;
+      if (op.kind === 'like') return col + " LIKE '" + op.tpl(w.v1 ?? '') + "'";
+      if (op.kind === 'plen') return col + " LIKE '" + '_'.repeat(Math.max(1, parseInt(w.v1, 10) || 1)) + "'";
+      if (op.kind === 'pnth') return col + " LIKE '" + '_'.repeat(Math.max(1, parseInt(w.v1, 10) || 1) - 1) + (w.v2 || '') + "%'";
+      if (op.kind === 'pnthlast') return col + " LIKE '%" + (w.v2 || '') + '_'.repeat(Math.max(1, parseInt(w.v1, 10) || 1) - 1) + "'";
+      if (op.kind === 'between') return col + ' BETWEEN ' + (w.v1 ?? '') + ' AND ' + (w.v2 ?? '');
+      if (op.kind === 'set') return col + (op.not ? ' NOT IN (' : ' IN (') + (w.v1 ?? '') + ')';
+      // scalar
+      let rhs = w.v1 ?? '';
+      if (w.src === 'column') rhs = colLabel(w.cmpTable, w.cmpCol);
+      else if (w.src === 'sub' && w.sub) rhs = subLabel(w.sub);
+      return col + ' ' + op.sql + ' ' + rhs;
+    }
+
+    if (op.kind === 'plen') return col + ' has exactly ' + (w.v1 || '?') + ' letters';
+    if (op.kind === 'pnth') return 'the ' + ord(w.v1) + ' letter of ' + col + ' is "' + (w.v2 || '') + '"';
+    if (op.kind === 'pnthlast') return 'the ' + ord(w.v1) + '-last letter of ' + col + ' is "' + (w.v2 || '') + '"';
     let rhs = '';
     if (op.kind === 'null') rhs = '';
     else if (w.src === 'column') rhs = ' the ' + colLabel(w.cmpTable, w.cmpCol);
-    else if (w.src === 'sub' && w.sub) {
-      if (w.sub.fn) rhs = ' ' + AGG_FNS[w.sub.fn].phrase + ' ' + w.sub.col + ' of ' + w.sub.table;
-      else rhs = ' the ' + w.sub.col + ' values from ' + w.sub.table;
-    }
+    else if (w.src === 'sub' && w.sub) rhs = ' ' + subLabel(w.sub);
     else if (op.kind === 'between') rhs = ' ' + (w.v1 ?? '') + ' and ' + (w.v2 ?? '');
     else if (op.kind === 'set') rhs = ' (' + (w.v1 ?? '') + ')';
     else rhs = ' ' + (w.v1 ?? '');
-    return colLabel(w.table, w.col) + ' ' + op.phrase + rhs;
+    return col + ' ' + op.phrase + rhs;
   }
 
   function chip(label, cat, part, onClick, onRemove) {
@@ -3476,30 +3791,48 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     return el('span', 'w', txt);
   }
 
+  /* lang-aware chip labels */
+  function aggLabel(fn, table, col) {
+    if (LANG === 'plain') {
+      if (fn === 'COUNT_D') return 'COUNT(DISTINCT ' + col + ')';
+      return fn + '(' + (col === '*' ? '*' : col) + ')';
+    }
+    return aggPhrase(fn, table, col);
+  }
+
+  function subLabel(sub) {
+    if (LANG === 'plain') {
+      return '(SELECT ' + (sub.fn ? sub.fn + '(' + sub.col + ')' : sub.col) + ' FROM ' + sub.table + ')';
+    }
+    return sub.fn ? AGG_FNS[sub.fn].phrase + ' ' + sub.col + ' of ' + sub.table
+                  : 'the ' + sub.col + ' values from ' + sub.table;
+  }
+
   function renderSentence() {
     const s = $('#sentence');
     s.textContent = '';
     if (!schema) return;
+    const plain = LANG === 'plain';
 
-    s.appendChild(word('Show me'));
+    s.appendChild(word(t('s.show')));
 
     if (Q.distinct) {
-      s.appendChild(chip('without duplicates', 'cat-limit', 'distinct',
+      s.appendChild(chip(t('s.distinct'), 'cat-limit', 'distinct',
         () => { Q.distinct = false; commit(); },
         () => { Q.distinct = false; commit(); }));
     }
 
     /* select items */
     if (!Q.select.length) {
-      const g = el('span', 'chip cat-col ghost-chip', Q.from ? 'everything ( * )' : '…');
+      const g = el('span', 'chip cat-col ghost-chip', Q.from ? t('s.everything') : '…');
       g.setAttribute('data-part', 'select-head');
       if (Q.from) g.addEventListener('click', e => { e.stopPropagation(); popColumns(e.currentTarget); });
       s.appendChild(g);
     } else {
       Q.select.forEach((it, i) => {
-        if (i) s.appendChild(word('and'));
+        if (i) s.appendChild(word(plain ? ',' : 'and'));
         if (it.kind === 'col') {
-          s.appendChild(chip('the ' + colLabel(it.table, it.col), 'cat-col', 'select-' + i,
+          s.appendChild(chip((plain ? '' : 'the ') + colLabel(it.table, it.col), 'cat-col', 'select-' + i,
             c => popColumns(c),
             () => { Q.select.splice(i, 1); commit(); }));
         } else if (it.kind === 'calc') {
@@ -3507,7 +3840,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
             c => popCalc(c, i),
             () => { Q.select.splice(i, 1); commit(); }));
         } else {
-          s.appendChild(chip(aggPhrase(it.fn, it.table, it.col), 'cat-agg', 'select-' + i,
+          s.appendChild(chip(aggLabel(it.fn, it.table, it.col), 'cat-agg', 'select-' + i,
             c => popAgg(c, i),
             () => { Q.select.splice(i, 1); commit(); }));
         }
@@ -3515,7 +3848,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     }
 
     /* from */
-    s.appendChild(word('from'));
+    s.appendChild(word(t('s.from')));
     if (Q.from) {
       s.appendChild(chip(Q.from, 'cat-table', 'from', c => popTable(c)));
     } else {
@@ -3526,8 +3859,10 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
     /* joins */
     Q.joins.forEach((j, i) => {
-      s.appendChild(word('together with'));
-      const label = (j.type === 'LEFT' ? 'its ' : 'the matching ') + j.table + (j.type === 'LEFT' ? ' (even if none)' : '');
+      s.appendChild(word(plain ? (j.type === 'LEFT' ? 'LEFT JOIN' : 'JOIN') : t('s.join')));
+      const label = plain
+        ? j.table
+        : (j.type === 'LEFT' ? 'its ' : 'the matching ') + j.table + (j.type === 'LEFT' ? ' (even if none)' : '');
       s.appendChild(chip(label, 'cat-table', 'join-' + i,
         c => popJoinEdit(c, i),
         () => { Q.joins.splice(i, 1); commit(); }));
@@ -3535,10 +3870,10 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
     /* where */
     if (Q.where.length) {
-      s.appendChild(word('where'));
+      s.appendChild(word(t('s.where')));
       Q.where.forEach((w, i) => {
         if (i) {
-          const cj = chip((w.conj || 'AND').toLowerCase(), 'cat-cond conj', 'conj-' + i,
+          const cj = chip(plain ? (w.conj || 'AND') : (w.conj || 'AND').toLowerCase(), 'cat-cond conj', 'conj-' + i,
             () => { w.conj = (w.conj === 'OR' ? 'AND' : 'OR'); commit(); });
           cj.title = 'Click to switch and/or';
           s.appendChild(cj);
@@ -3551,9 +3886,9 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
     /* group by */
     if (Q.groupBy.length) {
-      s.appendChild(word(', for each'));
+      s.appendChild(word(t('s.foreach')));
       Q.groupBy.forEach((g, i) => {
-        if (i) s.appendChild(word('and'));
+        if (i) s.appendChild(word(plain ? ',' : 'and'));
         s.appendChild(chip(colLabel(g.table, g.col), 'cat-group', 'group-' + i,
           c => popGroup(c),
           () => { Q.groupBy.splice(i, 1); commit(); }));
@@ -3562,34 +3897,28 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
     /* having */
     if (Q.having.length) {
-      s.appendChild(word(', keeping only groups where'));
+      s.appendChild(word(t('s.having')));
       Q.having.forEach((h, i) => {
         if (i) {
-          const cj = chip((h.conj || 'AND').toLowerCase(), 'cat-cond conj', 'hconj-' + i,
+          const cj = chip(plain ? (h.conj || 'AND') : (h.conj || 'AND').toLowerCase(), 'cat-cond conj', 'hconj-' + i,
             () => { h.conj = (h.conj === 'OR' ? 'AND' : 'OR'); commit(); });
           cj.title = 'Click to switch and/or';
           s.appendChild(cj);
         }
-        const fnTxt = h.col ? aggPhrase(h.fn, h.col.table, h.col.col) : 'the number of rows';
-        let rhsTxt;
-        if (h.src === 'sub' && h.sub) {
-          rhsTxt = h.sub.fn ? AGG_FNS[h.sub.fn].phrase + ' ' + h.sub.col + ' of ' + h.sub.table
-                            : 'the ' + h.sub.col + ' from ' + h.sub.table;
-        } else {
-          rhsTxt = h.value;
-        }
-        s.appendChild(chip(fnTxt + ' ' + OPS[h.op].phrase + ' ' + rhsTxt, 'cat-cond', 'having-' + i,
-          c => (h.mode === 'classic' ? popHaving : popCompare)(c, i),
+        const fnTxt = h.col ? aggLabel(h.fn, h.col.table, h.col.col) : (plain ? 'COUNT(*)' : 'the number of rows');
+        const rhsTxt = (h.src === 'sub' && h.sub) ? subLabel(h.sub) : h.value;
+        s.appendChild(chip(fnTxt + ' ' + opLabel(h.op) + ' ' + rhsTxt, 'cat-cond', 'having-' + i,
+          c => popCompare(c, i),
           () => { Q.having.splice(i, 1); commit(); }));
       });
     }
 
     /* order by */
     if (Q.orderBy.length) {
-      s.appendChild(word(', sorted by'));
+      s.appendChild(word(t('s.sorted')));
       Q.orderBy.forEach((o, i) => {
-        if (i) s.appendChild(word('then by'));
-        const base = o.kind === 'agg' ? aggPhrase(o.fn, o.table, o.col) : colLabel(o.table, o.col);
+        if (i) s.appendChild(word(t('s.thenby')));
+        const base = o.kind === 'agg' ? aggLabel(o.fn, o.table, o.col) : colLabel(o.table, o.col);
         s.appendChild(chip(base + (o.dir === 'DESC' ? ' ↓' : ' ↑'), 'cat-sort', 'order-' + i,
           c => popSort(c, i),
           () => { Q.orderBy.splice(i, 1); commit(); }));
@@ -3598,15 +3927,15 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
     /* limit */
     if (Q.limit && Q.limit.n) {
-      s.appendChild(word(', but only the first'));
+      s.appendChild(word(t('s.limit')));
       let lbl = String(Q.limit.n);
-      if (Q.limit.offset) lbl += ' (skipping ' + Q.limit.offset + ')';
+      if (Q.limit.offset) lbl += plain ? ' OFFSET ' + Q.limit.offset : ' (skipping ' + Q.limit.offset + ')';
       s.appendChild(chip(lbl, 'cat-limit', 'limit',
         c => popLimit(c),
         () => { Q.limit = null; commit(); }));
     }
 
-    s.appendChild(word('.'));
+    s.appendChild(word(t('s.dot')));
   }
 
   /* ================================================================
@@ -3627,18 +3956,16 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
     const noTable = !Q.from;
 
-    bank.appendChild(bankBtn(Q.from ? '⇄ change table' : '⬚ pick your table', 'cat-table', false, a => popTable(a)));
-    bank.appendChild(bankBtn('+ columns', 'cat-col', noTable, a => popColumns(a)));
-    bank.appendChild(bankBtn('+ count / total / average', 'cat-agg', noTable, a => popAgg(a)));
-    bank.appendChild(bankBtn('+ formula (√, split, letters…)', 'cat-agg', noTable, a => popCalc(a)));
-    bank.appendChild(bankBtn('+ related table (join)', 'cat-table', noTable || !joinCandidates().length, a => popJoin(a)));
-    bank.appendChild(bankBtn('+ condition (where)', 'cat-cond', noTable, a => popCondition(a)));
-    bank.appendChild(bankBtn('+ condition⁺ (compare calculations)', 'cat-cond', noTable, a => popCompare(a)));
-    bank.appendChild(bankBtn('+ group filter (having)', 'cat-cond', noTable || !Q.groupBy.length, a => popHaving(a)));
-    bank.appendChild(bankBtn('+ for each… (group by)', 'cat-group', noTable, a => popGroup(a)));
-    bank.appendChild(bankBtn('+ sorting (order by)', 'cat-sort', noTable, a => popSort(a)));
-    bank.appendChild(bankBtn(Q.limit ? '✎ limit' : '+ limit', 'cat-limit', noTable, a => popLimit(a)));
-    bank.appendChild(bankBtn('no duplicates (distinct)', 'cat-limit', noTable,
+    bank.appendChild(bankBtn(Q.from ? t('bank.changeTable') : t('bank.pickTable'), 'cat-table', false, a => popTable(a)));
+    bank.appendChild(bankBtn(t('bank.columns'), 'cat-col', noTable, a => popColumns(a)));
+    bank.appendChild(bankBtn(t('bank.agg'), 'cat-agg', noTable, a => popAgg(a)));
+    bank.appendChild(bankBtn(t('bank.calc'), 'cat-agg', noTable, a => popCalc(a)));
+    bank.appendChild(bankBtn(t('bank.join'), 'cat-table', noTable || !joinCandidates().length, a => popJoin(a)));
+    bank.appendChild(bankBtn(t('bank.condition'), 'cat-cond', noTable, a => popCondition(a)));
+    bank.appendChild(bankBtn(t('bank.group'), 'cat-group', noTable, a => popGroup(a)));
+    bank.appendChild(bankBtn(t('bank.sort'), 'cat-sort', noTable, a => popSort(a)));
+    bank.appendChild(bankBtn(Q.limit ? '✎ ' + t('bank.limitEdit') : t('bank.limit'), 'cat-limit', noTable, a => popLimit(a)));
+    bank.appendChild(bankBtn(t('bank.distinct'), 'cat-limit', noTable,
       () => { Q.distinct = !Q.distinct; commit(); }, Q.distinct));
   }
 
@@ -3945,6 +4272,23 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     if (isDateTimeType(c.type)) {
       flags.appendChild(nowButton(() => c.type, v => { c.def = v; commitCreate(); }));
     }
+    // allowed range → CHECK constraint
+    const minIn = document.createElement('input');
+    minIn.className = 'cdef';
+    minIn.style.width = '64px';
+    minIn.placeholder = 'min…';
+    minIn.value = c.chkMin != null ? c.chkMin : '';
+    minIn.title = 'lowest allowed value — becomes a CHECK constraint';
+    minIn.addEventListener('input', () => { c.chkMin = minIn.value; renderCreateSQL(); });
+    flags.appendChild(minIn);
+    const maxIn = document.createElement('input');
+    maxIn.className = 'cdef';
+    maxIn.style.width = '64px';
+    maxIn.placeholder = 'max…';
+    maxIn.value = c.chkMax != null ? c.chkMax : '';
+    maxIn.title = 'highest allowed value — becomes a CHECK constraint';
+    maxIn.addEventListener('input', () => { c.chkMax = maxIn.value; renderCreateSQL(); });
+    flags.appendChild(maxIn);
     row.appendChild(flags);
 
     /* reference row — only shown for FK-marked columns */
@@ -4308,7 +4652,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         // scalar comparison against a mini-query: keep the operator, show a chip
         const scalarOps = COND_OPS.filter(k => OPS[k].kind === 'scalar');
         if (!scalarOps.includes(w.op)) w.op = 'gt';
-        const opSel2 = makeSelect(scalarOps.map(k => ({ v: k, label: OPS[k].phrase })), w.op);
+        const opSel2 = makeSelect(scalarOps.map(k => ({ v: k, label: opLabel(k) })), w.op);
         opSel2.addEventListener('change', () => { w.op = opSel2.value; onChange(); });
         rhs.appendChild(opSel2);
         const label = (w.sub.fn ? w.sub.fn + '(' + w.sub.col + ')' : w.sub.col) + ' of ' + w.sub.table;
@@ -4323,7 +4667,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         return;
       }
 
-      const opSel = makeSelect(COND_OPS.map(k => ({ v: k, label: OPS[k].phrase })), w.op || 'eq');
+      const opSel = makeSelect(COND_OPS.map(k => ({ v: k, label: opLabel(k) })), w.op || 'eq');
       opSel.addEventListener('change', () => { w.op = opSel.value; buildRhs(); onChange(); });
       rhs.appendChild(opSel);
 
@@ -4457,31 +4801,156 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     saveDML();
   }
 
-  /* ---------- ALTER ---------- */
+  /* ---------- ALTER — edit the table like a designer; the SQL is the
+     before→after DIFF, so edits you revert emit nothing. ---------- */
   const ALTER_KINDS = [
-    { v: 'add', label: 'add a column' },
-    { v: 'drop', label: 'drop a column' },
-    { v: 'modify', label: 'modify a column (change its type)' },
-    { v: 'rename', label: 'rename a column' },
     { v: 'addfk', label: 'add a foreign key' },
-    { v: 'dropfk', label: 'drop a foreign key' },
-    { v: 'renameTable', label: 'rename the table' }
+    { v: 'dropfk', label: 'drop a foreign key' }
   ];
+
+  function splitTypeStr(typeStr) {
+    const m = String(typeStr || 'INT').match(/^([a-zA-Z]+)(?:\(([^)]*)\))?/);
+    return { type: m ? m[1].toUpperCase() : 'INT', args: m && m[2] ? m[2] : '' };
+  }
+
+  /* editable snapshot of a table; each column remembers its original form */
+  function snapshotAlterTable(tableName) {
+    const t = schema.byName[tableName];
+    const cols = (t ? t.columns : []).map(c => {
+      const st = splitTypeStr(c.type);
+      const base = { name: c.name, type: st.type, args: st.args, uns: !!c.unsigned, nn: !!c.notNull, ai: !!c.autoInc, def: '' };
+      return { ...base, _orig: { ...base } };
+    });
+    return { name: tableName, cols };
+  }
+
+  function sameColDef(a, b) {
+    return a.type === b.type && String(a.args || '') === String(b.args || '') &&
+      !!a.uns === !!b.uns && !!a.nn === !!b.nn && !!a.ai === !!b.ai &&
+      String(a.def || '') === String(b.def || '');
+  }
+
+  /* the heart of ALTER mode: before→after diff, as generator ops */
+  function computeAlterOps() {
+    const ops = [];
+    if (!A.edit) return ops;
+    const seenOrig = new Set();
+    for (const c of A.edit.cols) {
+      if (!c._orig) {
+        if (String(c.name || '').trim()) ops.push({ kind: 'add', name: c.name, type: c.type, args: c.args, uns: c.uns, nn: c.nn, ai: c.ai, def: c.def });
+        continue;
+      }
+      seenOrig.add(c._orig.name);
+      if (c.name !== c._orig.name) {
+        ops.push({ kind: 'rename', name: c._orig.name, newName: c.name, type: c.type, args: c.args, uns: c.uns, nn: c.nn, ai: c.ai, def: c.def });
+      } else if (!sameColDef(c, c._orig)) {
+        ops.push({ kind: 'modify', name: c.name, type: c.type, args: c.args, uns: c.uns, nn: c.nn, ai: c.ai, def: c.def });
+      }
+    }
+    const t = schema && schema.byName[A.table];
+    for (const oc of (t ? t.columns : [])) {
+      if (!seenOrig.has(oc.name)) ops.push({ kind: 'drop', name: oc.name });
+    }
+    for (const op of (A.ops || [])) ops.push(op);           // manual FK changes
+    if (A.edit.name && A.edit.name !== A.table) ops.push({ kind: 'renameTable', newName: A.edit.name });
+    return ops;
+  }
 
   function renderAlter() {
     $('#alter-lock').style.display = schema ? 'none' : '';
     $('#alter-body').style.display = schema ? '' : 'none';
-    if (!schema) { renderSegments($('#alter-sql'), generateAlterSegments(A, { byName: {} })); return; }
-    if (!A.table || !schema.byName[A.table]) A.table = schemaTableNames()[0] || null;
+    if (!schema) { renderSegments($('#alter-sql'), generateAlterSegments({ table: null, ops: [] }, { byName: {} })); return; }
+    if (!A.table || !schema.byName[A.table]) { A.table = schemaTableNames()[0] || null; A.edit = null; A.ops = []; }
+    if (!A.edit) A.edit = snapshotAlterTable(A.table);
 
     const picker = $('#alter-table');
     fillTablePicker(picker, A.table);
-    picker.onchange = () => { A.table = picker.value; renderAlter(); };
+    picker.onchange = () => { A.table = picker.value; A.edit = null; A.ops = []; renderAlter(); };
 
+    // designer: table name + column rows, CREATE-style
+    const dz = $('#alter-designer');
+    dz.textContent = '';
+    const card = el('div', 'tbl-card');
+    const head = el('div', 'tbl-head');
+    const nameIn = document.createElement('input');
+    nameIn.className = 'tname';
+    nameIn.value = A.edit.name || '';
+    nameIn.spellcheck = false;
+    nameIn.title = 'rename the table here';
+    nameIn.addEventListener('input', () => { A.edit.name = nameIn.value; renderAlterSQL(); });
+    head.appendChild(nameIn);
+    card.appendChild(head);
+    A.edit.cols.forEach((c, i) => card.appendChild(alterColRow(c, i)));
+    const add = el('button', 'btn small add-col', '+ column');
+    add.addEventListener('click', () => {
+      A.edit.cols.push({ name: '', type: 'VARCHAR', args: '255', uns: false, nn: true, ai: false, def: '', _orig: null });
+      renderAlter();
+    });
+    card.appendChild(add);
+    dz.appendChild(card);
+
+    // manual FK ops
     const box = $('#alter-ops');
     box.textContent = '';
     A.ops.forEach((op, i) => box.appendChild(alterOpCard(op, i)));
     renderAlterSQL();
+  }
+
+  /* one editable column row in the ALTER designer */
+  function alterColRow(c, i) {
+    const row = el('div', 'col-row');
+    const isNew = !c._orig;
+    const main = el('div', 'col-main');
+
+    const nameIn = document.createElement('input');
+    nameIn.className = 'cname';
+    nameIn.placeholder = 'column_name';
+    nameIn.spellcheck = false;
+    nameIn.value = c.name || '';
+    nameIn.title = isNew ? 'new column' : 'rename this column (was: ' + c._orig.name + ')';
+    nameIn.addEventListener('input', () => { c.name = nameIn.value; renderAlterSQL(); });
+    main.appendChild(nameIn);
+
+    const typeSel = makeSelect(ALTER_TYPES.map(x => ({ v: x, label: x })), c.type || 'INT');
+    typeSel.addEventListener('change', () => { c.type = typeSel.value; c.args = ARGS_DEFAULT[c.type] || ''; renderAlter(); });
+    main.appendChild(typeSel);
+
+    const argsIn = document.createElement('input');
+    argsIn.className = 'cargs';
+    argsIn.placeholder = '(…)';
+    argsIn.value = c.args || '';
+    argsIn.addEventListener('input', () => { c.args = argsIn.value; renderAlterSQL(); });
+    main.appendChild(argsIn);
+
+    const del = el('button', 'iconbtn', '✕');
+    del.title = isNew ? 'remove this new column' : 'drop this column';
+    del.addEventListener('click', () => { A.edit.cols.splice(i, 1); renderAlter(); });
+    main.appendChild(del);
+    row.appendChild(main);
+
+    const flags = el('div', 'col-flags');
+    const flag = (label, key) => {
+      const b = el('button', 'flag' + (c[key] ? ' on' : ''), label);
+      b.addEventListener('click', () => { c[key] = !c[key]; renderAlter(); });
+      flags.appendChild(b);
+    };
+    flag('NOT NULL', 'nn');
+    flag('AUTO INC', 'ai');
+    flag('UNSIGNED', 'uns');
+    const defIn = document.createElement('input');
+    defIn.className = 'cdef';
+    defIn.placeholder = 'DEFAULT…';
+    defIn.value = c.def || '';
+    defIn.addEventListener('input', () => { c.def = defIn.value; renderAlterSQL(); });
+    flags.appendChild(defIn);
+    if (isDateTimeType(c.type)) {
+      flags.appendChild(nowButton(() => c.type, v => { c.def = v; renderAlter(); }));
+    }
+    if (isNew) flags.appendChild(el('span', 'fk-warn', 'new'));
+    else if (c.name !== c._orig.name) flags.appendChild(el('span', 'fk-warn', 'renaming: ' + c._orig.name + ' → ' + c.name));
+    else if (!sameColDef(c, c._orig)) flags.appendChild(el('span', 'fk-warn', 'modified'));
+    row.appendChild(flags);
+    return row;
   }
 
   function existingColSelect(value, onChange) {
@@ -4525,14 +4994,9 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
   function alterOpCard(op, i) {
     const card = el('div', 'alter-op');
-    card.setAttribute('data-part', 'alt-' + i);
     const head = el('div', 'op-head');
     const kindSel = makeSelect(ALTER_KINDS, op.kind);
-    kindSel.addEventListener('change', () => {
-      op.kind = kindSel.value;
-      if ((op.kind === 'add' || op.kind === 'modify' || op.kind === 'rename') && !op.type) { op.type = 'VARCHAR'; op.args = '255'; }
-      renderAlter();
-    });
+    kindSel.addEventListener('change', () => { op.kind = kindSel.value; renderAlter(); });
     head.appendChild(kindSel);
     const del = el('button', 'iconbtn', '✕');
     del.addEventListener('click', () => { A.ops.splice(i, 1); renderAlter(); });
@@ -4547,30 +5011,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       return inp;
     };
 
-    if (op.kind === 'add') {
-      body.appendChild(nameIn(op.name, 'column name', v => op.name = v));
-      body.appendChild(colDefControls(op));
-    } else if (op.kind === 'drop') {
-      if (!op.name && colsOf(A.table)[0]) op.name = colsOf(A.table)[0].name;
-      body.appendChild(existingColSelect(op.name, v => { op.name = v; renderAlterSQL(); }));
-    } else if (op.kind === 'modify') {
-      if (!op.name && colsOf(A.table)[0]) op.name = colsOf(A.table)[0].name;
-      body.appendChild(existingColSelect(op.name, v => {
-        op.name = v; const c = colInfo(A.table, v);
-        if (c) { op.type = c.type.replace(/\(.*/, ''); op.args = (c.type.match(/\(([^)]*)\)/) || [])[1] || ''; op.uns = c.boolean ? false : /unsigned/i.test(c.type); }
-        renderAlter();
-      }));
-      body.appendChild(colDefControls(op));
-    } else if (op.kind === 'rename') {
-      if (!op.name && colsOf(A.table)[0]) op.name = colsOf(A.table)[0].name;
-      body.appendChild(existingColSelect(op.name, v => { op.name = v; renderAlterSQL(); }));
-      body.appendChild(el('span', 'set-eq', '→'));
-      body.appendChild(nameIn(op.newName, 'new name', v => op.newName = v));
-      body.appendChild(colDefControls(op));
-    } else if (op.kind === 'renameTable') {
-      body.appendChild(el('span', 'set-eq', '→'));
-      body.appendChild(nameIn(op.newName, 'new table name', v => op.newName = v));
-    } else if (op.kind === 'addfk') {
+    if (op.kind === 'addfk') {
       if (!op.col && colsOf(A.table)[0]) op.col = colsOf(A.table)[0].name;
       body.appendChild(existingColSelect(op.col, v => { op.col = v; renderAlterSQL(); }));
       body.appendChild(el('span', 'set-eq', '→'));
@@ -4605,7 +5046,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
   }
 
   function renderAlterSQL() {
-    renderSegments($('#alter-sql'), generateAlterSegments(A, schema || { byName: {} }));
+    renderSegments($('#alter-sql'), generateAlterSegments({ table: A.table, ops: computeAlterOps() }, schema || { byName: {} }));
     saveDML();
   }
 
@@ -4650,6 +5091,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     if (U.table && !schema.byName[U.table]) { U.table = null; U.sets = []; U.where = []; }
     if (D.table && !schema.byName[D.table]) { D.table = null; D.where = []; }
     if (A.table && !schema.byName[A.table]) { A.table = null; A.ops = []; }
+    A.edit = null; // schema changed → re-snapshot the ALTER designer from it
     renderSchemaView();
     commit();
     refreshDML();
@@ -4737,6 +5179,14 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     // ----- mode tabs -----
     for (const m of MODES) $('#tab-' + m).addEventListener('click', () => setMode(m));
 
+    // Natural ↔ Plain (SQL) toggle — same builder, two labelings
+    $('#lang-toggle').addEventListener('click', () => {
+      setLang(LANG === 'plain' ? 'natural' : 'plain');
+      refreshDML();
+      toast(LANG === 'plain' ? 'Labels now use SQL terms.' : 'Labels now read naturally.');
+    });
+    applyLangStatic();
+
     // ----- CREATE mode wiring -----
     $('#btn-add-table').addEventListener('click', addCreateTable);
     $('#btn-create-reset').addEventListener('click', () => {
@@ -4792,22 +5242,31 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     });
     $('#btn-add-alter-op').addEventListener('click', () => {
       if (!schema) return;
-      A.ops.push({ kind: 'add', name: '', type: 'VARCHAR', args: '255' });
+      A.ops.push({ kind: 'addfk' });
       renderAlter();
+    });
+    $('#btn-alter-reset').addEventListener('click', () => {
+      if (!schema) return;
+      A.edit = null; A.ops = [];
+      renderAlter();
+      toast('Back to the original table.');
     });
     $('#btn-copy-update').addEventListener('click', () => copyText(segmentsToText(generateUpdateSegments(U, schema || { byName: {} }))));
     $('#btn-copy-delete').addEventListener('click', () => copyText(segmentsToText(generateDeleteSegments(D, schema || { byName: {} }))));
-    $('#btn-copy-alter').addEventListener('click', () => copyText(segmentsToText(generateAlterSegments(A, schema || { byName: {} }))));
+    $('#btn-copy-alter').addEventListener('click', () => copyText(segmentsToText(generateAlterSegments({ table: A.table, ops: computeAlterOps() }, schema || { byName: {} }))));
     $('#btn-apply-alter').addEventListener('click', () => {
       if (!schema) { toast('Load a database first.'); return; }
-      if (!A.ops.length) { toast('Add a change first.'); return; }
-      const alterText = segmentsToText(generateAlterSegments(A, schema)).replace(/^--[^\n]*\n?/gm, '').trim();
+      const ops = computeAlterOps();
+      if (!ops.length) { toast('No changes to apply — edit the table first.'); return; }
+      const alterText = segmentsToText(generateAlterSegments({ table: A.table, ops }, schema)).replace(/^--[^\n]*\n?/gm, '').trim();
       if (!alterText) { toast('Nothing to apply.'); return; }
       const cur = $('#schema-input').value.replace(/\s+$/, '');
       const merged = cur + '\n\n-- applied in SQL Studio\n' + alterText + '\n';
       $('#schema-input').value = merged;
+      const renamed = A.edit && A.edit.name !== A.table ? A.edit.name : null;
       if (loadSchemaText(merged)) {
-        A.ops = [];
+        if (renamed) A.table = renamed;
+        A.ops = []; A.edit = null;
         renderAlter();
         toast('Applied — the loaded schema now includes these changes.');
       }
@@ -4820,7 +5279,10 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     I = loadDML('insert', I); if (!Array.isArray(I.cols)) I.cols = []; if (!Array.isArray(I.rows)) I.rows = [];
     U = loadDML('update', U); if (!Array.isArray(U.sets)) U.sets = []; if (!Array.isArray(U.where)) U.where = [];
     D = loadDML('delete', D); if (!Array.isArray(D.where)) D.where = [];
-    A = loadDML('alter', A); if (!Array.isArray(A.ops)) A.ops = [];
+    A = loadDML('alter', A);
+    if (!Array.isArray(A.ops)) A.ops = [];
+    A.ops = A.ops.filter(op => op && (op.kind === 'addfk' || op.kind === 'dropfk')); // column edits now live in the diff designer
+    A.edit = null; // always re-snapshot from the current schema
 
     let savedMode = null;
     try { savedMode = localStorage.getItem('selectstudio.mode'); } catch (e) { /* ignore */ }
@@ -4838,7 +5300,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     { mode: 'select', hi: '#schema-section', title: 'Start here: your database',
       text: 'We’ve loaded a small <b>demo library</b> so you can see everything working. This is where you’d paste your own SQL dump or upload a <code>.sql</code> file — structure only is fine. Every mode works on whatever’s loaded here.' },
     { mode: 'select', hi: '#word-bank', title: 'SELECT — query your data',
-      text: 'Click word-blocks like Lego to build a sentence — <b>columns, conditions, joins, group by, sorting</b>. It turns into real SQL live on the right. Use <b>“condition⁺”</b> to compare calculations (e.g. averages) in one step.' },
+      text: 'Click word-blocks like Lego to build a sentence — <b>columns, joins, grouping, sorting</b>, and ONE powerful <b>“+ condition”</b> that does it all: plain comparisons, calculations (averages, counts), mini-queries, and foreign keys <b>looked up by name</b>. The <b>✨/⟨/⟩ toggle</b> (top right) switches all labels between natural wording and real SQL terms.' },
     { mode: 'insert', hi: '#insert-body', title: 'INSERT — add new rows',
       text: 'Pick a table, choose which columns to fill, and type one or more rows. Blank cells become <code>DEFAULT</code>, and the <b>auto-increment id is locked</b> for you. Date columns get a <b>⏱ now</b> button.' },
     { mode: 'update', hi: '#update-body', title: 'UPDATE — change existing rows',
