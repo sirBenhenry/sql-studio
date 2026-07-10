@@ -2036,6 +2036,11 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         if (w.not) { push('NOT', 'k', p); push(' ', '', p); }
         push('IN', 'k', p); push(' ', '', p);
         pushLookup(push, w.lookup, schema, p);
+      } else if (w.sub) {
+        // col <op> (SELECT AVG(col) FROM table …) — scalar comparison
+        const op = OPS[w.op] && OPS[w.op].sql ? OPS[w.op] : OPS.eq;
+        push(' ' + op.sql + ' ', 'k', p);
+        pushMiniQuery(push, w.sub, schema, p);
       } else {
         pushOp(push, w.op, { v1: w.v1, v2: w.v2 }, colInfoOf(schema, table, w.col), p);
       }
@@ -2057,6 +2062,20 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         push(' ', '', p); push(m.col, 'i', p); push(' = ', 'k', p);
         pushLiteral(push, m.val, colInfoOf(schema, lk.table, m.col), p);
       });
+    }
+    push(')', '', p);
+  }
+
+  /* mini-query for DML conditions: sub = {table, fn, col, hasCond, cCol, cOp, cVal}
+     → (SELECT [FN(]col[)] FROM table [WHERE cCol op cVal]) */
+  function pushMiniQuery(push, sub, schema, p) {
+    push('(', '', p); push('SELECT', 'k', p); push(' ', '', p);
+    if (sub.fn) { push(sub.fn, 'f', p); push('(', '', p); push(sub.col, 'i', p); push(')', '', p); }
+    else push(sub.col, 'i', p);
+    push(' ', '', p); push('FROM', 'k', p); push(' ', '', p); push(sub.table, 'i', p);
+    if (sub.hasCond && sub.cCol && sub.cOp) {
+      push(' ', '', p); push('WHERE', 'k', p); push(' ', '', p); push(sub.cCol, 'i', p);
+      pushOp(push, sub.cOp, { v1: sub.cVal, v2: sub.cVal2 }, colInfoOf(schema, sub.table, sub.cCol), p);
     }
     push(')', '', p);
   }
@@ -4208,6 +4227,26 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     });
   }
 
+  /* mini-query popover for DML conditions — edits a copy, applies on save */
+  function popMiniQuery(anchor, w, onChange) {
+    openPop(anchor, 'Compare against a mini-query', box => {
+      const draft = { sub: w.sub ? JSON.parse(JSON.stringify(w.sub)) : null };
+      const sb = makeSubForm(draft, true);
+      box.appendChild(sb);
+      const act = el('div', 'actions');
+      const save = el('button', 'btn small primary', 'Use this');
+      save.addEventListener('click', () => {
+        sb._collect();
+        w.sub = draft.sub;
+        delete w.lookup;
+        closePop();
+        onChange();
+      });
+      act.appendChild(save);
+      box.appendChild(act);
+    });
+  }
+
   function renderInsertSQL() {
     renderSegments($('#insert-sql'), generateInsertSegments(I, schema || { byName: {} }));
     saveDML();
@@ -4241,9 +4280,11 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     row.appendChild(colSel);
 
     // everything right of the column is rebuilt by buildRhs() so we can swap
-    // between the normal operator+value and the FK-by-name lookup
+    // between the normal operator+value, FK-by-name, and mini-query forms
     const rhs = el('span', 'cond-rhs');
     row.appendChild(rhs);
+    // rebuild the row UI *and* refresh the SQL
+    const changed = () => { buildRhs(); onChange(); };
 
     function buildRhs() {
       rhs.textContent = '';
@@ -4254,11 +4295,30 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         rhs.appendChild(el('span', 'set-eq', w.not ? 'is none of' : 'is one of'));
         const chip = el('span', 'chip cat-cond', '🔎 ' + w.lookup.table + ': ' + (vals || '…'));
         chip.title = 'matching ' + w.lookup.table + ' by name — click to edit';
-        chip.addEventListener('click', () => popLookup(chip, fk.refTable, fk.refCol, w.lookup, lk => { w.lookup = lk; onChange(); }));
+        chip.addEventListener('click', () => popLookup(chip, fk.refTable, fk.refCol, w.lookup, lk => { w.lookup = lk; changed(); }));
         rhs.appendChild(chip);
         const back = el('button', 'iconbtn', 'value');
         back.title = 'compare against a plain value instead';
-        back.addEventListener('click', () => { delete w.lookup; onChange(); });
+        back.addEventListener('click', () => { delete w.lookup; changed(); });
+        rhs.appendChild(back);
+        return;
+      }
+
+      if (w.sub) {
+        // scalar comparison against a mini-query: keep the operator, show a chip
+        const scalarOps = COND_OPS.filter(k => OPS[k].kind === 'scalar');
+        if (!scalarOps.includes(w.op)) w.op = 'gt';
+        const opSel2 = makeSelect(scalarOps.map(k => ({ v: k, label: OPS[k].phrase })), w.op);
+        opSel2.addEventListener('change', () => { w.op = opSel2.value; onChange(); });
+        rhs.appendChild(opSel2);
+        const label = (w.sub.fn ? w.sub.fn + '(' + w.sub.col + ')' : w.sub.col) + ' of ' + w.sub.table;
+        const chip = el('span', 'chip cat-cond', '∑ ' + label);
+        chip.title = 'comparing against a mini-query — click to edit';
+        chip.addEventListener('click', () => popMiniQuery(chip, w, changed));
+        rhs.appendChild(chip);
+        const back = el('button', 'iconbtn', 'value');
+        back.title = 'compare against a plain value instead';
+        back.addEventListener('click', () => { delete w.sub; changed(); });
         rhs.appendChild(back);
         return;
       }
@@ -4287,9 +4347,15 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         const byName = el('button', 'flag lookup-btn', '🔎 by name');
         byName.title = 'match ' + fk.refTable + ' by a human column (compiles to a sub-query)';
         byName.addEventListener('click', () => {
-          popLookup(byName, fk.refTable, fk.refCol, null, lk => { w.lookup = lk; w.not = false; onChange(); });
+          popLookup(byName, fk.refTable, fk.refCol, null, lk => { w.lookup = lk; w.not = false; changed(); });
         });
         rhs.appendChild(byName);
+      }
+      if (OPS[w.op || 'eq'].kind === 'scalar') {
+        const subBtn = el('button', 'flag lookup-btn', '∑ mini-query');
+        subBtn.title = 'compare against a calculated value, e.g. the average price (compiles to a sub-query)';
+        subBtn.addEventListener('click', () => popMiniQuery(subBtn, w, changed));
+        rhs.appendChild(subBtn);
       }
     }
     buildRhs();
