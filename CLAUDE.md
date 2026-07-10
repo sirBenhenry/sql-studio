@@ -1,0 +1,47 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+**SQL Studio** — a visual, "Lego-style" builder for MySQL, shipped as a **single self-contained HTML file** (`sql-studio.html`). Everything (HTML, CSS, all JavaScript, and a demo database) is inlined into that one file. It runs **fully offline** by opening it in a browser — there is **no build step, no bundler, no dependencies, no server**. Do not add a build system or split it into modules: `file://` usage forbids ES modules/CORS, so the single-file, plain-`<script>` design is intentional.
+
+`versions/vN/` holds frozen snapshots of prior releases; the root `sql-studio.html` is the working (newest) build.
+
+## Editing & running
+
+- Edit `sql-studio.html` directly. To see it, open the file in a browser (double-click). There is nothing to compile.
+- The file is organized as four `<script>` blocks in order: **(0)** inline demo SQL, **(1)** `parseSchema`, **(2)** `SqlGen`, **(3)** the app IIFE. They share top-level globals (e.g. `DEMO_SQL`, `window.parseSchema`, `window.SqlGen`).
+
+## Verifying changes (no test runner in-repo)
+
+There is no test framework committed. Verify headlessly with Node:
+
+- **Syntax check** — extract and compile each script block:
+  ```bash
+  node -e "const fs=require('fs'),vm=require('vm');[...fs.readFileSync('sql-studio.html','utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)].forEach(m=>new vm.Script(m[1]));console.log('OK')"
+  ```
+- **Pure logic** (parser + generators) — run script blocks 1 & 2 in a `vm` context, then call `parseSchema(sql)` and `SqlGen.generate*Segments(...)`, comparing `SqlGen.segmentsToText(segs)` to expected SQL.
+- **Full UI behavior** — load the file into **jsdom** (`runScripts:'dangerously'`), dispatch `DOMContentLoaded`, then drive the real DOM (`$('#btn-demo').click()`, set inputs + dispatch `input`/`change`, read `#sql-output`/`#create-sql`/etc.). jsdom gotchas: define `window.requestAnimationFrame`, and `scrollIntoView`/`getBoundingClientRect` return nothing — guard or mock them.
+
+Always run the syntax check plus a jsdom smoke test (load demo, build one query per touched mode) before considering a change done.
+
+## Architecture (the big picture)
+
+Three layers inside the one file:
+
+1. **`parseSchema(sqlText)`** (block 1) → `{ tables:[{name, columns:[{name,type,numeric,boolean,unsigned,pk,notNull,autoInc}], fks:[{col,refTable,refCol}]}], byName }`. Reads only `CREATE TABLE` structure (data dumps and structure-only dumps both work), handles phpMyAdmin dumps, and **applies column-level `ALTER TABLE`** in document order via `applyAlterClause` (ADD/DROP/MODIFY/CHANGE/RENAME column, RENAME table, ADD FK/PK). Dedupes double-declared FKs.
+
+2. **`SqlGen`** (block 2) — generation is **segment-based**, not string concatenation. Each `generate*Segments()` returns `[{t:text, c:cssClass, p:partId}]`. `renderSegments()` turns segments into spans with `data-part` ids; `segmentsToText()` flattens to plain SQL. The shared `data-part` id is what powers **two-way hover highlighting** between the builder and the SQL panel. Generators: `generateSegments` (SELECT), `generateCreate/Insert/Update/Delete/AlterSegments`. Shared helpers: `OPS` (operators), `AGG_FNS`, `CALCS` (formula columns), `pushLiteral`/`pushWhere`/`pushOp`, `SQL_FUNC_RE` (functions like `NOW()`/`CURDATE()` emitted unquoted).
+
+3. **App IIFE** (block 3) — state + UI. SELECT uses a state object `Q` rendered as a clickable **sentence** + a **word bank** of buttons that open **popovers** (`popCondition`, `popCompare`, `popColumns`, `popJoin`, `popAgg`, `popCalc`, …). INSERT/UPDATE/DELETE/ALTER/CREATE have their own state (`I`,`U`,`D`,`A`,`C`) rendered as compact inline forms. `setMode()` toggles the six modes; a shared step-1 schema panel feeds every mode except CREATE. State persists in `localStorage` (`selectstudio.schema`, `.mode`, `.create`, `.insert/.update/.delete/.alter`, `.toured`).
+
+## Conventions that bite
+
+- **CSS variables:** the surface/background variable is `--bg` (white/near-black by theme). There is **no `--card`** — referencing an undefined var silently yields transparent backgrounds. Design is deliberately Swiss-minimal (hairline rules, one red accent `--accent`, black SQL "poster" panels). Theme via `prefers-color-scheme`.
+- **Foreign keys** drive most smart behavior: join suggestions, FK-follow in the column picker, dependency-ordered `CREATE`, and FK type-sync (a FK column's type is derived from its referenced column so `INT UNSIGNED` matches — avoids MariaDB errno 150).
+- **Onboarding tour** (`#tour`): a fixed hole-punch ring (`box-shadow: 0 0 0 9999px`) positioned from `getBoundingClientRect` — not by raising page elements. `startTour()` loads the demo first so every step has content. Plays once (localStorage `selectstudio.toured`); the `?` tab-bar button replays it.
+
+## Direction (v2, in progress)
+
+A larger reshape is planned: a **Natural ↔ SQL toggle** (same builder, two labelings), one unified **"big conditional"** (fuses WHERE/HAVING/subqueries/aggregates) reused as the "which rows" picker across UPDATE/DELETE, **foreign-key-by-name** lookups (set/match a FK by a human column, compiling to a subquery), a two-part layout for write modes (action on top, conditional below), `CHECK`/range in CREATE, ALTER-as-before/after-diff, and broader function coverage. Preserve the principle: **anything expressible in SQL should be buildable here.**

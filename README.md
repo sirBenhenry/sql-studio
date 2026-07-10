@@ -14,7 +14,7 @@ Built as a learning + productivity tool for writing MySQL by hand.
 
 ## Feed it your database
 
-Paste your SQL dump or upload a `.sql` file — only the `CREATE TABLE` structure is read, so dumps with or without data both work. Foreign keys are detected automatically and power the join suggestions. A built-in **pizza_express** demo schema is included so you can try everything immediately.
+Paste your SQL dump or upload a `.sql` file — only the `CREATE TABLE` structure is read, so dumps with or without data both work. Foreign keys are detected automatically and power the join suggestions. A small built-in **demo library** schema is included so you can try everything immediately.
 
 ## Use it
 
