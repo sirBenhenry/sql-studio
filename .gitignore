@@ -1,0 +1,10 @@
+# local editor / tooling config
+.claude/
+
+# school exercise material — not for public distribution
+SELECT.zip
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store
+*.swp
