@@ -2019,7 +2019,8 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     }
   }
 
-  /* shared WHERE clause: where = [{conj, col, op, v1, v2}] */
+  /* shared WHERE clause: where = [{conj, col, op, v1, v2}]
+     or FK-by-name: {conj, col, lookup:{table,ret,matches}, not?} */
   function pushWhere(push, where, schema, table, prefix) {
     if (!where || !where.length) return;
     push('\n');
@@ -2029,7 +2030,15 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       if (i) { push('\n  '); push((w.conj || 'AND'), 'k', p); }
       push(' ', '', p);
       push(w.col, 'i', p);
-      pushOp(push, w.op, { v1: w.v1, v2: w.v2 }, colInfoOf(schema, table, w.col), p);
+      if (w.lookup) {
+        // fk_col IN (SELECT ret FROM ref WHERE human = val …)
+        push(' ', '', p);
+        if (w.not) { push('NOT', 'k', p); push(' ', '', p); }
+        push('IN', 'k', p); push(' ', '', p);
+        pushLookup(push, w.lookup, schema, p);
+      } else {
+        pushOp(push, w.op, { v1: w.v1, v2: w.v2 }, colInfoOf(schema, table, w.col), p);
+      }
     });
   }
 
@@ -4213,9 +4222,11 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       cj.addEventListener('click', () => { w.conj = (w.conj === 'OR' ? 'AND' : 'OR'); onChange(); });
       row.appendChild(cj);
     }
+    let rowTable = null;
     const colSel = document.createElement('select');
     // columns are populated by the caller via row._fillCols(table)
     row._fillCols = (tbl) => {
+      rowTable = tbl;
       colSel.textContent = '';
       for (const c of colsOf(tbl)) {
         const o = document.createElement('option');
@@ -4224,30 +4235,65 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       }
       if (w.col) colSel.value = w.col;
       else w.col = colSel.value;
+      buildRhs();
     };
-    colSel.addEventListener('change', () => { w.col = colSel.value; onChange(); });
+    colSel.addEventListener('change', () => { w.col = colSel.value; if (w.lookup) delete w.lookup; buildRhs(); onChange(); });
     row.appendChild(colSel);
 
-    const opSel = makeSelect(COND_OPS.map(k => ({ v: k, label: OPS[k].phrase })), w.op || 'eq');
-    opSel.addEventListener('change', () => { w.op = opSel.value; onChange(); });
-    row.appendChild(opSel);
+    // everything right of the column is rebuilt by buildRhs() so we can swap
+    // between the normal operator+value and the FK-by-name lookup
+    const rhs = el('span', 'cond-rhs');
+    row.appendChild(rhs);
 
-    const kind = OPS[w.op || 'eq'].kind;
-    if (kind !== 'null') {
-      const v1 = document.createElement('input');
-      v1.type = 'text'; v1.value = w.v1 || '';
-      v1.placeholder = kind === 'set' ? 'a, b, c' : (kind === 'like' ? 'text' : 'value');
-      v1.addEventListener('input', () => { w.v1 = v1.value; onChange(); });
-      row.appendChild(v1);
-      if (kind === 'between') {
-        const andw = el('span', 'set-eq', 'and');
-        row.appendChild(andw);
-        const v2 = document.createElement('input');
-        v2.type = 'text'; v2.value = w.v2 || ''; v2.placeholder = 'value';
-        v2.addEventListener('input', () => { w.v2 = v2.value; onChange(); });
-        row.appendChild(v2);
+    function buildRhs() {
+      rhs.textContent = '';
+      const fk = rowTable ? fkOf(rowTable, w.col) : null;
+
+      if (w.lookup) {
+        const vals = (w.lookup.matches || []).map(m => m.val).filter(Boolean).join(', ');
+        rhs.appendChild(el('span', 'set-eq', w.not ? 'is none of' : 'is one of'));
+        const chip = el('span', 'chip cat-cond', '🔎 ' + w.lookup.table + ': ' + (vals || '…'));
+        chip.title = 'matching ' + w.lookup.table + ' by name — click to edit';
+        chip.addEventListener('click', () => popLookup(chip, fk.refTable, fk.refCol, w.lookup, lk => { w.lookup = lk; onChange(); }));
+        rhs.appendChild(chip);
+        const back = el('button', 'iconbtn', 'value');
+        back.title = 'compare against a plain value instead';
+        back.addEventListener('click', () => { delete w.lookup; onChange(); });
+        rhs.appendChild(back);
+        return;
+      }
+
+      const opSel = makeSelect(COND_OPS.map(k => ({ v: k, label: OPS[k].phrase })), w.op || 'eq');
+      opSel.addEventListener('change', () => { w.op = opSel.value; buildRhs(); onChange(); });
+      rhs.appendChild(opSel);
+
+      const kind = OPS[w.op || 'eq'].kind;
+      if (kind !== 'null') {
+        const v1 = document.createElement('input');
+        v1.type = 'text'; v1.value = w.v1 || '';
+        v1.placeholder = kind === 'set' ? 'a, b, c' : (kind === 'like' ? 'text' : 'value');
+        v1.addEventListener('input', () => { w.v1 = v1.value; onChange(); });
+        rhs.appendChild(v1);
+        if (kind === 'between') {
+          rhs.appendChild(el('span', 'set-eq', 'and'));
+          const v2 = document.createElement('input');
+          v2.type = 'text'; v2.value = w.v2 || ''; v2.placeholder = 'value';
+          v2.addEventListener('input', () => { w.v2 = v2.value; onChange(); });
+          rhs.appendChild(v2);
+        }
+      }
+
+      if (fk) {
+        const byName = el('button', 'flag lookup-btn', '🔎 by name');
+        byName.title = 'match ' + fk.refTable + ' by a human column (compiles to a sub-query)';
+        byName.addEventListener('click', () => {
+          popLookup(byName, fk.refTable, fk.refCol, null, lk => { w.lookup = lk; w.not = false; onChange(); });
+        });
+        rhs.appendChild(byName);
       }
     }
+    buildRhs();
+
     const del = el('button', 'iconbtn', '✕');
     del.addEventListener('click', () => { where.splice(i, 1); onChange(); });
     row.appendChild(del);
