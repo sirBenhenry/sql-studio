@@ -1626,26 +1626,39 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       else push("'" + escStr(v) + "'", 's', p);
     }
 
-    /* subquery: (SELECT [FN(]col[)] FROM table [WHERE col op val]) */
-    function pushSub(sub, p) {
+    /* subquery: (SELECT [FN(]col[)] FROM table [WHERE col op val])
+       Correlated form (sub.cSame): the filter compares against the SAME
+       column of the outer row — e.g. "the average price of its own genre":
+       (SELECT AVG(x.price) FROM book x WHERE x.fk_genre_id = book.fk_genre_id).
+       The sub table gets an alias so it can safely be the outer table too. */
+    function pushSub(sub, p, outerTable) {
+      const correlated = !!(sub.hasCond && sub.cSame && sub.cCol && outerTable);
+      const al = correlated ? 'x' : null;
+      const q = c => (al ? al + '.' + c : c);
       push('(', '', p);
       push('SELECT', 'k', p);
       push(' ', '', p);
       if (sub.fn) {
-        pushAggFn(push, sub.fn, sub.col, p);
+        pushAggFn(push, sub.fn, q(sub.col), p);
       } else {
-        push(sub.col, 'i', p);
+        push(q(sub.col), 'i', p);
       }
       push(' ', '', p);
       push('FROM', 'k', p);
       push(' ', '', p);
       push(sub.table, 'i', p);
-      if (sub.hasCond && sub.cCol && sub.cOp) {
+      if (al) { push(' ', '', p); push(al, 'i', p); }
+      if (sub.hasCond && sub.cCol && (sub.cOp || correlated)) {
         push(' ', '', p);
         push('WHERE', 'k', p);
         push(' ', '', p);
-        push(sub.cCol, 'i', p);
-        pushCore(sub.cOp, { v1: sub.cVal, v2: sub.cVal2 }, colInfo(sub.table, sub.cCol), p);
+        push(q(sub.cCol), 'i', p);
+        if (correlated) {
+          push(' = ', 'k', p);
+          push(outerTable + '.' + sub.cCol, 'i', p);
+        } else {
+          pushCore(sub.cOp, { v1: sub.cVal, v2: sub.cVal2 }, colInfo(sub.table, sub.cCol), p);
+        }
       }
       push(')', '', p);
     }
@@ -1757,12 +1770,12 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
           push(qn(w.cmpTable, w.cmpCol), 'i', p);
         } else if (op.kind === 'scalar' && w.src === 'sub') {
           push(' ' + op.sql + ' ', 'k', p);
-          pushSub(w.sub, p);
+          pushSub(w.sub, p, w.table);
         } else if (op.kind === 'set' && w.src === 'sub') {
           push(' ', '', p);
           if (op.not) { push('NOT', 'k', p); push(' ', '', p); }
           push('IN', 'k', p); push(' ', '', p);
-          pushSub(w.sub, p);
+          pushSub(w.sub, p, w.table);
         } else {
           pushCore(w.op, { v1: w.v1, v2: w.v2 }, info, p);
         }
@@ -1795,7 +1808,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         const op = OPS[h.op] || OPS.gte;
         push(' ' + op.sql + ' ', 'k', p);
         if (h.src === 'sub' && h.sub) {
-          pushSub(h.sub, p);
+          pushSub(h.sub, p, h.col ? h.col.table : null);
         } else if (isNumericLiteral(h.value)) {
           push(String(h.value).trim(), 'n', p);
         } else {
@@ -2384,7 +2397,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
   const STR = {
     natural: {
       'bank.pickTable': '⬚ pick your table', 'bank.changeTable': '⇄ change table',
-      'bank.columns': '+ columns', 'bank.agg': '+ count / total / average',
+      'bank.columns': '+ show… (columns & calculations)', 'bank.agg': '+ count / total / average',
       'bank.calc': '+ formula (√, split, letters…)', 'bank.join': '+ related table (join)',
       'bank.condition': '+ condition', 'bank.group': '+ for each… (group by)',
       'bank.sort': '+ sorting (order by)', 'bank.limit': '+ limit', 'bank.limitEdit': 'limit',
@@ -2765,8 +2778,18 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
   /* ----- column picker (multi-toggle) ----- */
   function popColumns(anchor) {
-    openPop(anchor, 'Which columns do you want to see?', box => {
-      box.appendChild(el('p', 'hint', 'Click to add or remove. No columns picked = everything (*).'));
+    openPop(anchor, 'What do you want to see?', box => {
+      box.appendChild(el('p', 'hint', 'Click to add or remove. Nothing picked = everything (*).'));
+
+      /* no duplicates (DISTINCT) lives with "what to show" */
+      const dLine = el('div', 'checkline');
+      const dCb = document.createElement('input');
+      dCb.type = 'checkbox';
+      dCb.checked = !!Q.distinct;
+      dCb.addEventListener('change', () => { Q.distinct = dCb.checked; commit(); });
+      dLine.appendChild(dCb);
+      dLine.appendChild(document.createTextNode(' show each result only once (no duplicates)'));
+      box.appendChild(dLine);
 
       const selIdx = (tbl, col) => Q.select.findIndex(s => s.kind === 'col' && s.table === tbl && s.col === col);
       const colChip = (tbl, col, labelText) => {
@@ -2810,6 +2833,19 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
           box.appendChild(fchips);
         }
       }
+
+      /* calculations live here too — one "output" place, like Ben thinks */
+      box.appendChild(el('label', null, 'calculations'));
+      const calcChips = el('div', 'chips');
+      calcChips.style.marginBottom = '10px';
+      const aggChip = el('span', 'chip cat-agg', '+ count / total / average…');
+      aggChip.addEventListener('click', () => popAgg(anchor));
+      calcChips.appendChild(aggChip);
+      const fChip = el('span', 'chip cat-agg', '+ formula (√, letters, dates…)');
+      fChip.addEventListener('click', () => popCalc(anchor));
+      calcChips.appendChild(fChip);
+      box.appendChild(calcChips);
+
       const done = el('button', 'btn small primary', 'Done');
       done.addEventListener('click', closePop);
       const act = el('div', 'actions');
@@ -2846,6 +2882,19 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
           }
           colSel.appendChild(g);
         }
+        // related tables reachable over a foreign key (either direction):
+        // picking one auto-joins it — "the average price of the book, over the FK"
+        for (const cand of joinCandidates()) {
+          const g = document.createElement('optgroup');
+          g.label = cand.table + '  (related — joins automatically)';
+          for (const c of colsOf(cand.table)) {
+            const o = document.createElement('option');
+            o.value = cand.table + '|' + c.name;
+            o.textContent = c.name + '  (' + c.type + ')';
+            g.appendChild(o);
+          }
+          colSel.appendChild(g);
+        }
         if (existing && existing.fn === fnSel.value) {
           colSel.value = existing.col === '*' ? '*|*' : existing.table + '|' + existing.col;
         }
@@ -2863,6 +2912,10 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       const btn = el('button', 'btn small primary', existing ? 'Save' : 'Add');
       btn.addEventListener('click', () => {
         const [t, c] = colSel.value.split('|');
+        if (t !== '*' && !tablesInQuery().includes(t)) {
+          const cand = joinCandidates().find(x => x.table === t);
+          if (cand) ensureFkJoin(cand.baseTable, cand.baseCol, cand.table, cand.joinCol);
+        }
         const item = { kind: 'agg', fn: fnSel.value, table: t === '*' ? null : t, col: c };
         if (existing) Q.select[editIdx] = item;
         else Q.select.push(item);
@@ -3056,7 +3109,16 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
     if (!host.sub || !schema.byName[host.sub.table]) {
       const t0 = schema.tables[0].name;
-      host.sub = { table: t0, fn: scalar ? 'AVG' : null, col: colsOf(t0)[0].name, hasCond: false, cCol: null, cOp: 'eq', cVal: '' };
+      host.sub = { table: t0, fn: scalar ? 'AVG' : null, col: colsOf(t0)[0].name, hasCond: false, cCol: null, cOp: 'eq', cVal: '', cSame: false };
+      // smart default: if the outer condition column is referenced by an FK of
+      // some table, start the mini-query there returning that FK column —
+      // "id is none of … the fk_member_id values from loan" in one step.
+      if (host.table && host.col) {
+        for (const ot of schema.tables) {
+          const fk = ot.fks.find(f => f.refTable === host.table && f.refCol === host.col);
+          if (fk) { host.sub.table = ot.name; host.sub.col = fk.col; break; }
+        }
+      }
     }
     if (scalar && !host.sub.fn) host.sub.fn = 'AVG';
     if (!scalar) host.sub.fn = null;
@@ -3099,11 +3161,12 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     cb.type = 'checkbox';
     cb.checked = !!host.sub.hasCond;
     const condRow = el('div', 'row');
-    condRow.style.display = cb.checked ? 'flex' : 'none';
-    cb.addEventListener('change', () => {
-      host.sub.hasCond = cb.checked;
+    const sameLine = el('div', 'checkline');
+    const syncCond = () => {
       condRow.style.display = cb.checked ? 'flex' : 'none';
-    });
+      sameLine.style.display = cb.checked ? 'flex' : 'none';
+    };
+    cb.addEventListener('change', () => { host.sub.hasCond = cb.checked; syncCond(); });
     chk.appendChild(cb);
     chk.appendChild(document.createTextNode(' filter the mini-query (WHERE)'));
     sb.appendChild(chk);
@@ -3115,9 +3178,27 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     fVal.type = 'text';
     fVal.value = host.sub.cVal || '';
     condRow.appendChild(fieldWrap('where column', fcSel));
-    condRow.appendChild(fieldWrap('…', fOp));
-    condRow.appendChild(fieldWrap('value', fVal));
+    const opWrap = fieldWrap('…', fOp);
+    const valWrap = fieldWrap('value', fVal);
+    condRow.appendChild(opWrap);
+    condRow.appendChild(valWrap);
     sb.appendChild(condRow);
+
+    // correlated: compare the filter column against the SAME column of the
+    // current outer row — "…of its own genre" (S7)
+    const sameCb = document.createElement('input');
+    sameCb.type = 'checkbox';
+    sameCb.checked = !!host.sub.cSame;
+    const syncSame = () => {
+      opWrap.style.display = sameCb.checked ? 'none' : '';
+      valWrap.style.display = sameCb.checked ? 'none' : '';
+    };
+    sameCb.addEventListener('change', syncSame);
+    sameLine.appendChild(sameCb);
+    sameLine.appendChild(document.createTextNode(' same as each row’s own value (e.g. “of its own genre”)'));
+    sb.appendChild(sameLine);
+    syncCond();
+    syncSame();
 
     sb._collect = () => {
       host.sub.table = tSel.value;
@@ -3127,6 +3208,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       host.sub.cCol = fcSel.value;
       host.sub.cOp = fOp.value;
       host.sub.cVal = fVal.value;
+      host.sub.cSame = sameCb.checked;
     };
     return sb;
   }
@@ -3831,11 +3913,15 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
   }
 
   function subLabel(sub) {
+    const correlated = sub.hasCond && sub.cSame && sub.cCol;
     if (LANG === 'plain') {
-      return '(SELECT ' + (sub.fn ? sub.fn + '(' + sub.col + ')' : sub.col) + ' FROM ' + sub.table + ')';
+      let s = '(SELECT ' + (sub.fn ? (sub.fn === 'COUNT_D' ? 'COUNT(DISTINCT ' + sub.col + ')' : sub.fn + '(' + sub.col + ')') : sub.col) + ' FROM ' + sub.table;
+      if (correlated) s += ' WHERE ' + sub.cCol + ' = …row';
+      return s + ')';
     }
-    return sub.fn ? AGG_FNS[sub.fn].phrase + ' ' + sub.col + ' of ' + sub.table
-                  : 'the ' + sub.col + ' values from ' + sub.table;
+    const base = sub.fn ? AGG_FNS[sub.fn].phrase + ' ' + sub.col + ' of ' + sub.table
+                        : 'the ' + sub.col + ' values from ' + sub.table;
+    return correlated ? base + ' with the same ' + sub.cCol : base;
   }
 
   /* ---------- PLAIN (SQL) builder: a statement skeleton, one line per
@@ -4138,17 +4224,15 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
     const noTable = !Q.from;
 
+    /* the shrunken natural bank: everything you SHOW lives in one dialog
+       (columns, FK-follow, calculations, no-duplicates); joins happen
+       implicitly through FK-follow; conditions are the one big conditional. */
     bank.appendChild(bankBtn(Q.from ? t('bank.changeTable') : t('bank.pickTable'), 'cat-table', false, a => popTable(a)));
     bank.appendChild(bankBtn(t('bank.columns'), 'cat-col', noTable, a => popColumns(a)));
-    bank.appendChild(bankBtn(t('bank.agg'), 'cat-agg', noTable, a => popAgg(a)));
-    bank.appendChild(bankBtn(t('bank.calc'), 'cat-agg', noTable, a => popCalc(a)));
-    bank.appendChild(bankBtn(t('bank.join'), 'cat-table', noTable || !joinCandidates().length, a => popJoin(a)));
     bank.appendChild(bankBtn(t('bank.condition'), 'cat-cond', noTable, a => popCondition(a)));
     bank.appendChild(bankBtn(t('bank.group'), 'cat-group', noTable, a => popGroup(a)));
     bank.appendChild(bankBtn(t('bank.sort'), 'cat-sort', noTable, a => popSort(a)));
     bank.appendChild(bankBtn(Q.limit ? '✎ ' + t('bank.limitEdit') : t('bank.limit'), 'cat-limit', noTable, a => popLimit(a)));
-    bank.appendChild(bankBtn(t('bank.distinct'), 'cat-limit', noTable,
-      () => { Q.distinct = !Q.distinct; commit(); }, Q.distinct));
   }
 
   /* ================================================================
@@ -5482,7 +5566,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     { mode: 'select', hi: '#schema-section', title: 'Start here: your database',
       text: 'We’ve loaded a small <b>demo library</b> so you can see everything working. This is where you’d paste your own SQL dump or upload a <code>.sql</code> file — structure only is fine. Every mode works on whatever’s loaded here.' },
     { mode: 'select', hi: '#word-bank', title: 'SELECT — query your data',
-      text: 'Click word-blocks like Lego to build a sentence — <b>columns, joins, grouping, sorting</b>, and ONE powerful <b>“+ condition”</b> that does it all: plain comparisons, calculations (averages, counts), mini-queries, and foreign keys <b>looked up by name</b>. The <b>✨/⟨/⟩ toggle</b> (top right) switches all labels between natural wording and real SQL terms.' },
+      text: 'Five blocks, that’s it: <b>“+ show”</b> holds columns, calculations and no-duplicates (related tables join in automatically when you pick their fields), ONE powerful <b>“+ condition”</b> does all filtering — comparisons, averages, mini-queries, foreign keys <b>by name</b> — plus <b>for each</b>, <b>sorting</b> and <b>limit</b>. The <b>✨/⟨/⟩ toggle</b> (top right) switches to a fillable SQL statement skeleton.' },
     { mode: 'insert', hi: '#insert-body', title: 'INSERT — add new rows',
       text: 'Pick a table, choose which columns to fill, and type one or more rows. Blank cells become <code>DEFAULT</code>, and the <b>auto-increment id is locked</b> for you. Date columns get a <b>⏱ now</b> button.' },
     { mode: 'update', hi: '#update-body', title: 'UPDATE — change existing rows',
