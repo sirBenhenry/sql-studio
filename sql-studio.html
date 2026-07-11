@@ -262,6 +262,30 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 24px 80px; }
   font-family: inherit;
 }
 
+/* Plain (SQL) mode: the builder is a statement skeleton, one line per clause */
+.sentence.sql-mode {
+  display: block;
+  line-height: 1.9;
+  padding: 14px 16px 12px;
+}
+.sentence.sql-mode .clause-line {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 7px;
+  padding: 3px 0;
+}
+.sentence.sql-mode .clause-kw {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-weight: 700; font-size: .82rem; letter-spacing: .03em;
+  color: var(--accent);
+  min-width: 92px; flex: 0 0 auto;
+}
+.sentence.sql-mode .clause-line.empty .clause-kw { color: var(--muted); opacity: .5; }
+.sentence.sql-mode .w {
+  font-style: normal;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: .84rem;
+}
+.sentence.sql-mode .ghost-chip { font-size: .78rem; }
+
 /* ---------- chips ---------- */
 .chip {
   --cc: var(--cat-limit);
@@ -2406,6 +2430,12 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
   /* static labels in the write-mode sections */
   function applyLangStatic() {
     const set = (sel, key) => { const n = document.querySelector(sel); if (n) n.textContent = t(key); };
+    const bh = document.querySelector('#builder-section > .hint');
+    if (bh) {
+      bh.textContent = LANG === 'plain'
+        ? 'The statement skeleton: every clause on its own line, in the order MySQL wants them. Click a + to fill a clause; click any piece to edit it. Hover a piece to see its SQL light up.'
+        : 'Click pieces together like Lego. The connector words are the SQL clauses in disguise: from = FROM, where = WHERE, for each = GROUP BY, sorted by = ORDER BY. Hover any piece to see its SQL light up.';
+    }
     set('#update-section .op-lead', 'w.update');
     set('#delete-section .op-lead', 'w.delete');
     set('#insert-section .op-lead', 'w.insert');
@@ -3151,7 +3181,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
      Left side is a column (→ WHERE) or a calculation (→ HAVING, with
      inline grouping). Right side: value · another column · mini-query ·
      FK-by-name lookup. ----- */
-  function popCondition(anchor, editIdx) {
+  function popCondition(anchor, editIdx, initialKind) {
     const isEdit = editIdx != null;
     const w = isEdit
       ? JSON.parse(JSON.stringify(Q.where[editIdx]))
@@ -3162,7 +3192,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       w.col = colsOf(t)[0] ? colsOf(t)[0].name : null;
     }
     const idxForConj = isEdit ? editIdx : Q.where.length;
-    let ckind = 'col'; // 'col' → WHERE, 'calc' → HAVING
+    let ckind = initialKind === 'calc' ? 'calc' : 'col'; // 'col' → WHERE, 'calc' → HAVING
 
     openPop(anchor, isEdit ? 'Edit condition' : 'Add a condition', box => {
 
@@ -3808,11 +3838,159 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
                   : 'the ' + sub.col + ' values from ' + sub.table;
   }
 
+  /* ---------- PLAIN (SQL) builder: a statement skeleton, one line per
+     clause, that you fill visually — structurally different from the
+     natural sentence, but driving the exact same Q state + dialogs. ---------- */
+
+  function clauseLine(kw, active) {
+    const line = el('div', 'clause-line' + (active ? '' : ' empty'));
+    line.appendChild(el('span', 'clause-kw', kw));
+    return line;
+  }
+
+  function ghostAdd(label, onClick) {
+    const g = el('span', 'chip ghost-chip', label);
+    g.addEventListener('click', e => { e.stopPropagation(); onClick(e.currentTarget); });
+    return g;
+  }
+
+  function renderPlainStatement(s) {
+    const noTable = !Q.from;
+
+    /* SELECT — columns / aggregates / expressions */
+    const selLine = clauseLine('SELECT', true);
+    if (Q.distinct) {
+      selLine.appendChild(chip('DISTINCT', 'cat-limit', 'distinct',
+        () => { Q.distinct = false; commit(); },
+        () => { Q.distinct = false; commit(); }));
+    } else if (!noTable) {
+      selLine.appendChild(ghostAdd('DISTINCT?', () => { Q.distinct = true; commit(); }));
+    }
+    if (!Q.select.length) {
+      const g = el('span', 'chip cat-col ghost-chip', '*');
+      g.setAttribute('data-part', 'select-head');
+      if (!noTable) g.addEventListener('click', e => { e.stopPropagation(); popColumns(e.currentTarget); });
+      selLine.appendChild(g);
+    } else {
+      Q.select.forEach((it, i) => {
+        if (i) selLine.appendChild(word(','));
+        if (it.kind === 'col') {
+          selLine.appendChild(chip(colLabel(it.table, it.col), 'cat-col', 'select-' + i,
+            c => popColumns(c), () => { Q.select.splice(i, 1); commit(); }));
+        } else if (it.kind === 'calc') {
+          selLine.appendChild(chip(calcPhrase(it), 'cat-agg', 'select-' + i,
+            c => popCalc(c, i), () => { Q.select.splice(i, 1); commit(); }));
+        } else {
+          selLine.appendChild(chip(aggLabel(it.fn, it.table, it.col), 'cat-agg', 'select-' + i,
+            c => popAgg(c, i), () => { Q.select.splice(i, 1); commit(); }));
+        }
+      });
+    }
+    if (!noTable) {
+      selLine.appendChild(ghostAdd('+ col', a => popColumns(a)));
+      selLine.appendChild(ghostAdd('+ fn()', a => popAgg(a)));
+      selLine.appendChild(ghostAdd('+ expr', a => popCalc(a)));
+    }
+    s.appendChild(selLine);
+
+    /* FROM */
+    const fromLine = clauseLine('FROM', true);
+    if (Q.from) fromLine.appendChild(chip(Q.from, 'cat-table', 'from', c => popTable(c)));
+    else {
+      const g = el('span', 'chip cat-table ghost-chip', 'pick a table…');
+      g.addEventListener('click', e => { e.stopPropagation(); popTable(e.currentTarget); });
+      fromLine.appendChild(g);
+    }
+    s.appendChild(fromLine);
+    if (noTable) return;
+
+    /* JOIN — one line per join, plus a ghost line when more are possible */
+    Q.joins.forEach((j, i) => {
+      const jl = clauseLine(j.type === 'LEFT' ? 'LEFT JOIN' : 'JOIN', true);
+      jl.appendChild(chip(j.table, 'cat-table', 'join-' + i,
+        c => popJoinEdit(c, i), () => { Q.joins.splice(i, 1); commit(); }));
+      jl.appendChild(word('ON ' + j.baseTable + '.' + j.baseCol + ' = ' + j.table + '.' + j.joinCol));
+      s.appendChild(jl);
+    });
+    if (joinCandidates().length) {
+      const jl = clauseLine('JOIN', false);
+      jl.appendChild(ghostAdd('+ table…', a => popJoin(a)));
+      s.appendChild(jl);
+    }
+
+    /* WHERE */
+    const wl = clauseLine('WHERE', Q.where.length > 0);
+    Q.where.forEach((w, i) => {
+      if (i) {
+        const cj = chip(w.conj || 'AND', 'cat-cond conj', 'conj-' + i,
+          () => { w.conj = (w.conj === 'OR' ? 'AND' : 'OR'); commit(); });
+        cj.title = 'Click to switch AND/OR';
+        wl.appendChild(cj);
+      }
+      wl.appendChild(chip(condLabel(w), 'cat-cond', 'where-' + i,
+        c => popCondition(c, i), () => { Q.where.splice(i, 1); commit(); }));
+    });
+    wl.appendChild(ghostAdd('+ condition…', a => popCondition(a, null, 'col')));
+    s.appendChild(wl);
+
+    /* GROUP BY */
+    const gl = clauseLine('GROUP BY', Q.groupBy.length > 0);
+    Q.groupBy.forEach((g, i) => {
+      if (i) gl.appendChild(word(','));
+      gl.appendChild(chip(colLabel(g.table, g.col), 'cat-group', 'group-' + i,
+        c => popGroup(c), () => { Q.groupBy.splice(i, 1); commit(); }));
+    });
+    gl.appendChild(ghostAdd('+ col…', a => popGroup(a)));
+    s.appendChild(gl);
+
+    /* HAVING */
+    const hl = clauseLine('HAVING', Q.having.length > 0);
+    Q.having.forEach((h, i) => {
+      if (i) {
+        const cj = chip(h.conj || 'AND', 'cat-cond conj', 'hconj-' + i,
+          () => { h.conj = (h.conj === 'OR' ? 'AND' : 'OR'); commit(); });
+        hl.appendChild(cj);
+      }
+      const fnTxt = h.col ? aggLabel(h.fn, h.col.table, h.col.col) : 'COUNT(*)';
+      const rhsTxt = (h.src === 'sub' && h.sub) ? subLabel(h.sub) : h.value;
+      hl.appendChild(chip(fnTxt + ' ' + opLabel(h.op) + ' ' + rhsTxt, 'cat-cond', 'having-' + i,
+        c => popCompare(c, i), () => { Q.having.splice(i, 1); commit(); }));
+    });
+    hl.appendChild(ghostAdd('+ condition…', a => popCondition(a, null, 'calc')));
+    s.appendChild(hl);
+
+    /* ORDER BY */
+    const ol = clauseLine('ORDER BY', Q.orderBy.length > 0);
+    Q.orderBy.forEach((o, i) => {
+      if (i) ol.appendChild(word(','));
+      const base = o.kind === 'agg' ? aggLabel(o.fn, o.table, o.col) : colLabel(o.table, o.col);
+      ol.appendChild(chip(base + (o.dir === 'DESC' ? ' DESC' : ' ASC'), 'cat-sort', 'order-' + i,
+        c => popSort(c, i), () => { Q.orderBy.splice(i, 1); commit(); }));
+    });
+    ol.appendChild(ghostAdd('+ col…', a => popSort(a)));
+    s.appendChild(ol);
+
+    /* LIMIT */
+    const ll = clauseLine('LIMIT', !!(Q.limit && Q.limit.n));
+    if (Q.limit && Q.limit.n) {
+      let lbl = String(Q.limit.n);
+      if (Q.limit.offset) lbl += ' OFFSET ' + Q.limit.offset;
+      ll.appendChild(chip(lbl, 'cat-limit', 'limit',
+        c => popLimit(c), () => { Q.limit = null; commit(); }));
+    } else {
+      ll.appendChild(ghostAdd('+ n…', a => popLimit(a)));
+    }
+    s.appendChild(ll);
+  }
+
   function renderSentence() {
     const s = $('#sentence');
     s.textContent = '';
     if (!schema) return;
     const plain = LANG === 'plain';
+    s.classList.toggle('sql-mode', plain);
+
+    if (plain) { renderPlainStatement(s); return; }
 
     s.appendChild(word(t('s.show')));
 
@@ -3953,6 +4131,10 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     const bank = $('#word-bank');
     bank.textContent = '';
     if (!schema) return;
+    // Plain (SQL) mode: the statement skeleton carries its own + slots per
+    // clause, so the word bank disappears — you build inside the statement.
+    if (LANG === 'plain') { bank.style.display = 'none'; return; }
+    bank.style.display = '';
 
     const noTable = !Q.from;
 
