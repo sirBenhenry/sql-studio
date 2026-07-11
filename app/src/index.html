@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SQL Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ======= top bar ======= -->
+  <header id="topbar">
+    <div class="brand">SQL<span class="accent">*</span>Studio</div>
+    <div id="project-label" class="project-label"></div>
+    <div class="topbar-right">
+      <div id="lang-toggle" class="lang-switch" title="Two views of the same builder: natural wording, or SQL statements">
+        <button class="lang-opt" data-lang="natural">Natural</button>
+        <button class="lang-opt" data-lang="plain">SQL</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ======= welcome (no project) ======= -->
+  <section id="welcome">
+    <div class="welcome-inner">
+      <h1>SQL<span class="accent">*</span>Studio</h1>
+      <p class="tagline">A project folder that <em>is</em> a database.</p>
+      <div class="btn-row">
+        <button class="btn primary" id="btn-new-project">New project…</button>
+        <button class="btn" id="btn-open-project">Open project…</button>
+      </div>
+      <div id="recent-list" class="recent-list"></div>
+      <p class="hint">A project holds <code>schema.sql</code> (the database definition — edited live),
+        <code>data.sql</code> (seed rows), <code>journal.sql</code> (every applied change),
+        and your saved queries.</p>
+    </div>
+  </section>
+
+  <!-- ======= workspace ======= -->
+  <main id="workspace" hidden>
+    <div id="editor-pane">
+      <div id="file-tabs" class="file-tabs"></div>
+      <div id="editor-host">
+        <textarea id="editor" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <div id="splitter-v" class="splitter-v" title="drag to resize"></div>
+
+    <div id="builder-pane">
+      <div class="pane-head">Builder</div>
+      <div id="builder-host">
+        <p class="hint pad">The visual builder lands here next (port of the v2 engine —
+          conditions, FK-by-name, the works). For now, the editor and console are live.</p>
+      </div>
+    </div>
+
+    <div id="splitter-h" class="splitter-h" title="drag to resize"></div>
+
+    <div id="console-pane">
+      <div class="pane-head">
+        <span>Console</span>
+        <span id="engine-status" class="engine-status">● engine: not running (arrives in P2)</span>
+      </div>
+      <div id="console-log"></div>
+      <div class="console-input-row">
+        <input id="console-input" type="text" spellcheck="false"
+          placeholder="type SQL and press Enter — runs against the project database" />
+      </div>
+    </div>
+  </main>
+
+  <footer id="statusbar">
+    <span id="status-left">no project</span>
+    <span id="status-right">SQL Studio 0.1</span>
+  </footer>
+
+  <div id="toast"></div>
+
+  <!-- core engine, extracted verbatim from the lite tool (see scripts/extract-core.mjs) -->
+  <script src="core/demo.js"></script>
+  <script src="core/parser.js"></script>
+  <script src="core/sqlgen.js"></script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
