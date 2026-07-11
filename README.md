@@ -22,7 +22,9 @@ Download `sql-studio.html` and double-click it. That's the whole thing.
 
 ## Status
 
-Actively developed. `versions/v1/` holds frozen snapshots; the root `sql-studio.html` is the current build. A larger v2 (a unified "condition engine", foreign-key-by-name lookups, a Natural ↔ SQL toggle, and broader function coverage) is in progress.
+Actively developed. `versions/vN/` holds frozen snapshots; the root `sql-studio.html` is the current build.
+
+**v2** (frozen in `versions/v2/`) delivered the big conceptual reshape: one unified **condition** dialog (WHERE + HAVING + subqueries + correlated "of its own group" comparisons), **foreign-key-by-name** lookups everywhere (reference rows by human columns — compiles to subqueries), a **Natural ↔ SQL** view switch (clickable sentence vs. a fillable statement skeleton), invisible FK-driven joins (also inside calculations, both directions), ALTER as a **before→after diff editor**, `CHECK` ranges in CREATE, and a wider function library.
 
 ---
 
