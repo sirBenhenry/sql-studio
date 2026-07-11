@@ -779,15 +779,24 @@ footer p { margin: 0; }
   background: color-mix(in srgb, var(--ink) 10%, transparent);
   padding: 1px 6px; border-radius: 3px; font-size: .84em;
 }
-.lang-toggle {
-  margin-left: auto;
-  font-size: .72rem !important; font-weight: 700; letter-spacing: .06em;
-  color: var(--muted);
-  border: 1px solid var(--line); border-radius: 14px;
-  padding: 3px 12px !important; align-self: center;
+/* Natural | SQL — a flat segmented switch in the tab bar's own language:
+   square corners, hairline border, active side inverted (like .flag.on) */
+.lang-switch {
+  margin-left: auto; align-self: center;
+  display: flex;
+  border: 1px solid var(--line);
 }
-.lang-toggle:hover { color: var(--accent); border-color: var(--accent); box-shadow: none; }
-.lang-toggle.active { box-shadow: none; }
+.lang-opt {
+  background: none; border: 0; cursor: pointer;
+  font-family: inherit;
+  font-size: .68rem; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted);
+  padding: 5px 12px;
+}
+.lang-opt + .lang-opt { border-left: 1px solid var(--line); }
+.lang-opt:hover { color: var(--ink); }
+.lang-opt.active { background: var(--ink); color: var(--bg); }
 .tour-replay {
   margin-left: 10px; color: var(--muted); font-weight: 700;
   border: 1px solid var(--line); border-radius: 50%;
@@ -832,7 +841,10 @@ footer p { margin: 0; }
     <button id="tab-delete" class="mode-tab">DELETE <span>— remove data</span></button>
     <button id="tab-create" class="mode-tab">CREATE <span>— design tables</span></button>
     <button id="tab-alter" class="mode-tab">ALTER <span>— change tables</span></button>
-    <button id="lang-toggle" class="mode-tab lang-toggle" title="Switch between natural wording and SQL terms — same builder, two labelings">✨ Natural</button>
+    <div id="lang-toggle" class="lang-switch" title="Two views of the same builder: natural wording, or a fillable SQL statement">
+      <button class="lang-opt" data-lang="natural">Natural</button>
+      <button class="lang-opt" data-lang="plain">SQL</button>
+    </div>
     <button id="tour-replay" class="mode-tab tour-replay" title="Replay the quick tour">?</button>
   </div>
 
@@ -2457,8 +2469,8 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     const u = labs('update-section'); if (u[0]) u[0].textContent = t('w.set'); if (u[1]) u[1].textContent = t('w.where');
     const d = labs('delete-section'); if (d[0]) d[0].textContent = t('w.where');
     const ins = labs('insert-section'); if (ins[0]) ins[0].textContent = t('w.cols'); if (ins[1]) ins[1].textContent = t('w.rows');
-    const tog = document.querySelector('#lang-toggle');
-    if (tog) tog.textContent = LANG === 'plain' ? '⟨/⟩ SQL' : '✨ Natural';
+    document.querySelectorAll('#lang-toggle .lang-opt').forEach(b =>
+      b.classList.toggle('active', b.dataset.lang === LANG));
   }
 
   function setLang(l) {
@@ -5445,11 +5457,14 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     // ----- mode tabs -----
     for (const m of MODES) $('#tab-' + m).addEventListener('click', () => setMode(m));
 
-    // Natural ↔ Plain (SQL) toggle — same builder, two labelings
-    $('#lang-toggle').addEventListener('click', () => {
-      setLang(LANG === 'plain' ? 'natural' : 'plain');
+    // Natural ↔ SQL segmented switch — click a side (or the switch itself toggles)
+    $('#lang-toggle').addEventListener('click', e => {
+      const opt = e.target.closest('.lang-opt');
+      const next = opt ? opt.dataset.lang : (LANG === 'plain' ? 'natural' : 'plain');
+      if (next === LANG) return;
+      setLang(next);
       refreshDML();
-      toast(LANG === 'plain' ? 'Labels now use SQL terms.' : 'Labels now read naturally.');
+      toast(LANG === 'plain' ? 'SQL view: fill the statement directly.' : 'Natural view: click your sentence together.');
     });
     applyLangStatic();
 
