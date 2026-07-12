@@ -70,5 +70,86 @@ hooks.schemaChanged(d.querySelector('#schema-input').value);
 ck('schema merged', d.querySelector('#schema-input').value.includes('CREATE TABLE category'));
 ck('hooks complete', calls.filter(c => c.kind === 'run').length >= 3 && calls.some(c => c.kind === 'schema'));
 
+/* ==== the shim's own document wiring (wireBuilder): action bar, semi-live
+   INSERT, live-value autocomplete ==== */
+const tick = ms => new Promise(r => setTimeout(r, ms));
+const { wireBuilder } = await import('../src/builder-shim.js');
+const calls2 = [];
+const lookupCalls = [];
+wireBuilder(d, window, {
+  runScript: async (sql, source, opts) => { calls2.push({ sql, source, opts }); return true; },
+  appendData: sql => calls2.push({ data: sql }),
+  lookupValues: async (table, column, prefix) => {
+    lookupCalls.push({ table, column, prefix });
+    return ['Anna', 'Annabel'];
+  }
+});
+ck('action bar mounted', !!d.querySelector('#ide-actionbar'));
+
+// a schema with a (self-referencing) FK for the lookup flows
+d.querySelector('#schema-input').value =
+  'CREATE DATABASE fc;\nUSE fc;\nCREATE TABLE member (id INT UNSIGNED NOT NULL AUTO_INCREMENT, name VARCHAR(40) NOT NULL, invited_by INT UNSIGNED, PRIMARY KEY(id), FOREIGN KEY(invited_by) REFERENCES member(id));';
+d.querySelector('#btn-parse').click();
+d.querySelector('#tab-insert').click();
+
+// ---- + add row applies the built row first, then starts a fresh one ----
+{
+  const nameInp = [...d.querySelectorAll('#insert-rows .set-row input')].find(i => i.title === 'name');
+  ck('insert row has the name input', !!nameInp);
+  nameInp.value = 'Anna';
+  nameInp.dispatchEvent(new window.Event('input', { bubbles: true }));
+  calls2.length = 0;
+  d.querySelector('#btn-add-insert-row').click();
+  await tick(60);
+  ck('+ row applies the current row', calls2.some(c => c.sql && c.sql.includes("'Anna'")), JSON.stringify(calls2));
+  const rows = d.querySelectorAll('#insert-rows .set-row');
+  ck('+ row leaves one fresh empty row',
+    rows.length === 1 && [...rows[0].querySelectorAll('input')].every(i => !i.value),
+    rows.length);
+}
+
+// ---- bottom-bar Apply also resets the rows (no double-insert) ----
+{
+  const nameInp = [...d.querySelectorAll('#insert-rows .set-row input')].find(i => i.title === 'name');
+  nameInp.value = 'Ben';
+  nameInp.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(10);
+  calls2.length = 0;
+  d.querySelector('#ide-actionbar button').click();
+  await tick(60);
+  ck('Apply runs the insert', calls2.some(c => c.sql && c.sql.includes("'Ben'")), JSON.stringify(calls2));
+  const rows = d.querySelectorAll('#insert-rows .set-row');
+  ck('Apply clears the applied rows',
+    rows.length === 1 && [...rows[0].querySelectorAll('input')].every(i => !i.value),
+    rows.length);
+}
+
+// ---- FK-by-name lookup gets live-value suggestions ----
+{
+  const lookupBtn = d.querySelector('#insert-rows .lookup-btn');
+  ck('FK column offers 🔎 by name', !!lookupBtn);
+  lookupBtn.click();
+  const pop = d.querySelector('.popover');
+  ck('lookup popover opened', !!pop && pop.querySelector('h4').textContent.startsWith('Look up member'), pop && pop.querySelector('h4').textContent);
+  const valInp = [...pop.querySelectorAll('input')].find(i => i.placeholder === 'value');
+  const colSel = valInp.closest('.row').querySelector('select');
+  colSel.value = 'name';
+  colSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  valInp.focus();
+  valInp.value = 'ann';
+  valInp.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(250); // debounce
+  ck('live values queried for member.name',
+    lookupCalls.some(c => c.table === 'member' && c.column === 'name' && c.prefix === 'ann'),
+    JSON.stringify(lookupCalls));
+  const sug = d.querySelector('#ide-suggest');
+  ck('suggestions shown inside the popover (outside-click safe)',
+    sug && sug.style.display === 'block' && sug.closest('.popover') === pop,
+    sug && sug.style.display);
+  sug.querySelector('.ide-sug-item').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+  ck('picking a suggestion fills the value', valInp.value === 'Anna', valInp.value);
+  ck('dropdown hidden after pick', sug.style.display === 'none', sug.style.display);
+}
+
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);

@@ -811,6 +811,22 @@ builder = mountBuilder($('#builder-host'), {
   runScript,
   appendData,
   appendSchema,
+  /* live values for the FK-by-name autocomplete: real rows, fuzzy-matched */
+  async lookupValues(table, column, prefix) {
+    if (!engineRunning || !currentDb) return [];
+    const tid = String(table).replace(/[^\w$]/g, '');
+    const cid = String(column).replace(/[^\w$]/g, '');
+    if (!tid || !cid) return [];
+    const like = String(prefix).replace(/([\\%_])/g, '\\$1').replace(/'/g, "''");
+    try {
+      const res = await invoke('db_exec', {
+        sql: 'SELECT DISTINCT `' + cid + '` FROM `' + tid + '` WHERE `' + cid +
+          "` LIKE '%" + like + "%' LIMIT 8",
+        db: currentDb
+      });
+      return res.rows.map(r => r[0]).filter(v => v != null);
+    } catch { return []; }
+  },
   onReady() {
     builder.setLang(LANG);
     builder.setTheme(SETTINGS.theme);

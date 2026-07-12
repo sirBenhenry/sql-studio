@@ -73,6 +73,17 @@ const HIDE_CSS = `
     font-size: .68rem; color: var(--muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+
+  /* live-value suggestions under FK-by-name inputs (shim-owned) */
+  #ide-suggest {
+    position: fixed; z-index: 999; display: none;
+    background: var(--bg); border: 1px solid var(--rule);
+    box-shadow: 0 8px 20px rgba(0,0,0,.22);
+    max-height: 180px; overflow-y: auto; overflow-x: hidden;
+    font-size: .78rem;
+  }
+  .ide-sug-item { padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+  .ide-sug-item:hover, .ide-sug-item.active { background: var(--ink); color: var(--bg); }
 `;
 
 /* forced-theme overrides for the lite tool (it only knows the OS media
@@ -97,6 +108,247 @@ const THEME_CSS = `
 /* the lite tool's empty-state notes talk about its own step-1 upload panel,
    which the IDE hides — reword them for the IDE world */
 const LOCK_NOTE = 'No tables yet — design one in the ⊞ database tab, or type CREATE TABLE statements into schema.sql.';
+
+/** Wire a loaded builder document into the IDE: hide chrome, add the action
+ *  bar, live-value autocomplete for FK-by-name lookups, and the semi-live
+ *  INSERT flow. Exported separately so tests can run it against jsdom. */
+export function wireBuilder(d, win, hooks) {
+  const style = d.createElement('style');
+  style.textContent = HIDE_CSS + THEME_CSS;
+  d.head.appendChild(style);
+
+  // reword the lite tool's "load a database in step 1" empty-state notes
+  for (const n of d.querySelectorAll('.lock-note')) n.textContent = LOCK_NOTE;
+
+  // CREATE always extends the project's database — never "from scratch"
+  const boiler = d.querySelector('#chk-boiler');
+  if (boiler && boiler.checked) {
+    boiler.checked = false;
+    boiler.dispatchEvent(new win.Event('change', { bubbles: true }));
+  }
+
+  const panelText = sel => (d.querySelector(sel) ? d.querySelector(sel).textContent : '');
+
+  /* ---- semi-live INSERT: rows apply as you go ---- */
+
+  /** collapse the insert builder back to one clean empty row (the lite tool
+   *  resets to a fresh row when the last one is removed) */
+  function clearInsertRows() {
+    for (let guard = 0; guard < 60; guard++) {
+      const rows = [...d.querySelectorAll('#insert-rows .set-row')];
+      if (!rows.length) break;
+      if (rows.length === 1) {
+        const filled = [...rows[0].querySelectorAll('input')].some(i => i.value) ||
+          rows[0].querySelector('.chip');
+        if (!filled) break;
+      }
+      const del = [...rows[0].querySelectorAll('button.iconbtn')].filter(b => b.textContent === '✕').pop();
+      if (!del) break;
+      del.click();
+    }
+  }
+
+  /* ---- the mode-contextual actions (executed through the IDE hooks) ---- */
+  const ACTIONS = {
+    select: {
+      label: '▶ Run',
+      title: 'execute this query against the project database',
+      sqlSel: '#sql-output',
+      run: sql => hooks.runScript(sql, 'builder: select', { journal: false })
+    },
+    insert: {
+      label: '✓ Apply',
+      title: 'execute and record in data.sql',
+      sqlSel: '#insert-sql',
+      run: async sql => {
+        const ok = await hooks.runScript(sql, 'builder: insert', { journal: true });
+        if (ok) {
+          if (hooks.appendData) hooks.appendData(sql);
+          clearInsertRows(); // applied rows must not apply twice
+        }
+        return ok;
+      }
+    },
+    update: {
+      label: '✓ Apply',
+      title: 'execute against the project database',
+      sqlSel: '#update-sql',
+      run: sql => hooks.runScript(sql, 'builder: update', { journal: true })
+    },
+    delete: {
+      label: '✓ Apply',
+      title: 'execute against the project database',
+      sqlSel: '#delete-sql',
+      run: sql => hooks.runScript(sql, 'builder: delete', { journal: true })
+    },
+    // CREATE and ALTER live in the IDE's Tables designer (⊞ database tab)
+  };
+
+  const currentMode = () => {
+    const t = d.querySelector('.mode-tab.active');
+    const m = t ? t.id.replace('tab-', '') : 'select';
+    return ACTIONS[m] ? m : 'select';
+  };
+
+  /* generated SQL, comment lines stripped (placeholders/warnings) */
+  const currentSQL = () => {
+    const a = ACTIONS[currentMode()];
+    return panelText(a.sqlSel).split('\n').filter(l => !l.trim().startsWith('--')).join('\n').trim();
+  };
+
+  /* ---- the single action bar ---- */
+  const bar = d.createElement('div');
+  bar.id = 'ide-actionbar';
+  const peek = d.createElement('span');
+  peek.className = 'sqlpeek';
+  const actBtn = d.createElement('button');
+  actBtn.className = 'btn primary small';
+  bar.appendChild(peek);
+  bar.appendChild(actBtn);
+  d.body.appendChild(bar);
+
+  function refreshBar() {
+    const a = ACTIONS[currentMode()];
+    actBtn.textContent = a.label;
+    actBtn.title = a.title;
+    const sql = currentSQL();
+    peek.textContent = sql.replace(/\s+/g, ' ');
+    actBtn.disabled = !splitSQL(sql).length;
+  }
+
+  actBtn.addEventListener('click', async () => {
+    const a = ACTIONS[currentMode()];
+    const sql = currentSQL();
+    if (!splitSQL(sql).length) return;
+    actBtn.disabled = true;
+    try { await a.run(sql); } finally { refreshBar(); }
+  });
+
+  /* "+ add row" first applies what's built (Ben's rule: adding the next one
+     commits the last one) — so a by-name lookup can find the row before it */
+  d.addEventListener('click', e => {
+    const btn = e.target && e.target.closest && e.target.closest('#btn-add-insert-row');
+    if (!btn || currentMode() !== 'insert') return;
+    const sql = currentSQL();
+    if (!splitSQL(sql).length) return; // nothing built yet — plain add
+    e.stopPropagation();
+    e.preventDefault();
+    (async () => {
+      const ok = await hooks.runScript(sql, 'builder: insert', { journal: true });
+      if (ok) {
+        if (hooks.appendData) hooks.appendData(sql);
+        clearInsertRows(); // leaves one fresh empty row — that IS the new row
+      }
+      refreshBar();
+    })();
+  }, true);
+  const addRowBtn = d.querySelector('#btn-add-insert-row');
+  if (addRowBtn) addRowBtn.title = 'applies this row to the database, then starts the next';
+
+  // keep the bar current: mode switches + any change inside the builder
+  d.addEventListener('click', () => setTimeout(refreshBar, 0));
+  d.addEventListener('input', () => setTimeout(refreshBar, 0));
+  d.addEventListener('change', () => setTimeout(refreshBar, 0));
+  refreshBar();
+
+  /* ---- live-value autocomplete for FK-by-name lookups: typing "ann" in
+     a "Look up member by…" popover suggests real values from the live DB ---- */
+  const sug = d.createElement('div');
+  sug.id = 'ide-suggest';
+  let sugFor = null;
+  let sugIdx = -1;
+  let sugT = null;
+
+  function hideSug() {
+    sug.style.display = 'none';
+    sugFor = null;
+    sugIdx = -1;
+  }
+  function sugEls() { return [...sug.querySelectorAll('.ide-sug-item')]; }
+  function pick(v) {
+    const t = sugFor;
+    hideSug();
+    if (!t) return;
+    t.value = v;
+    t.dispatchEvent(new win.Event('input', { bubbles: true }));
+    clearTimeout(sugT); // no point suggesting what was just picked
+    t.focus();
+  }
+  function showSug(input, values) {
+    if (!values.length) { hideSug(); return; }
+    sug.textContent = '';
+    for (const v of values) {
+      const it = d.createElement('div');
+      it.className = 'ide-sug-item';
+      it.textContent = v;
+      it.addEventListener('mousedown', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        sugFor = input;
+        pick(v);
+      });
+      sug.appendChild(it);
+    }
+    // live INSIDE the popover — the lite tool closes popovers on any
+    // outside mousedown, and the dropdown must not count as outside
+    const parent = input.closest('.popover') || d.body;
+    if (sug.parentNode !== parent) parent.appendChild(sug);
+    const r = input.getBoundingClientRect();
+    sug.style.left = r.left + 'px';
+    sug.style.top = (r.bottom + 2) + 'px';
+    sug.style.minWidth = r.width + 'px';
+    sug.style.display = 'block';
+    sugFor = input;
+    sugIdx = -1;
+  }
+  /** which live table/column a lookup-popover value input is matching */
+  function lookupCtx(input) {
+    if (!input || input.placeholder !== 'value') return null;
+    const pop = input.closest('.popover');
+    const h = pop && pop.querySelector('h4');
+    const m = h && h.textContent.match(/^Look up ([\w$]+) by/);
+    if (!m) return null;
+    const rowEl = input.closest('.row');
+    const sel = rowEl && rowEl.querySelector('select');
+    return (sel && sel.value) ? { table: m[1], column: sel.value } : null;
+  }
+
+  d.addEventListener('input', e => {
+    const t = e.target;
+    if (!t || t.tagName !== 'INPUT') return;
+    const ctx = lookupCtx(t);
+    if (!ctx || !hooks.lookupValues) { if (sugFor === t) hideSug(); return; }
+    clearTimeout(sugT);
+    const q = t.value.trim();
+    if (!q) { hideSug(); return; }
+    sugT = setTimeout(async () => {
+      try {
+        const vals = await hooks.lookupValues(ctx.table, ctx.column, q);
+        if (d.activeElement === t && t.value.trim() === q) showSug(t, vals.map(String));
+      } catch { hideSug(); }
+    }, 150);
+  });
+  d.addEventListener('keydown', e => {
+    if (!sugFor || e.target !== sugFor || sug.style.display === 'none') return;
+    const items = sugEls();
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      sugIdx = e.key === 'ArrowDown' ? Math.min(items.length - 1, sugIdx + 1) : Math.max(0, sugIdx - 1);
+      items.forEach((it, i) => it.classList.toggle('active', i === sugIdx));
+    } else if (e.key === 'Enter' && sugIdx >= 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      pick(items[sugIdx].textContent);
+    } else if (e.key === 'Escape') {
+      hideSug();
+    }
+  }, true);
+  d.addEventListener('focusout', () => {
+    setTimeout(() => { if (sugFor && d.activeElement !== sugFor) hideSug(); }, 120);
+  });
+
+  return { refreshBar, clearInsertRows };
+}
 
 export function mountBuilder(host, hooks) {
   // Neutralize the lite tool's own persistence before it boots: no tour,
@@ -146,103 +398,10 @@ export function mountBuilder(host, hooks) {
   frame.addEventListener('load', () => {
     const d = frame.contentDocument;
 
-    const style = d.createElement('style');
-    style.textContent = HIDE_CSS + THEME_CSS;
-    d.head.appendChild(style);
+    wireBuilder(d, frame.contentWindow, hooks);
     if (api._theme && api._theme !== 'system') {
       d.documentElement.setAttribute('data-theme', api._theme);
     }
-
-    // reword the lite tool's "load a database in step 1" empty-state notes
-    for (const n of d.querySelectorAll('.lock-note')) n.textContent = LOCK_NOTE;
-
-    // CREATE always extends the project's database — never "from scratch"
-    const boiler = d.querySelector('#chk-boiler');
-    if (boiler && boiler.checked) {
-      boiler.checked = false;
-      boiler.dispatchEvent(new frame.contentWindow.Event('change', { bubbles: true }));
-    }
-
-    const panelText = sel => (d.querySelector(sel) ? d.querySelector(sel).textContent : '');
-
-    /* ---- the mode-contextual actions (executed through the IDE hooks) ---- */
-    const ACTIONS = {
-      select: {
-        label: '▶ Run',
-        title: 'execute this query against the project database',
-        sqlSel: '#sql-output',
-        run: sql => hooks.runScript(sql, 'builder: select', { journal: false })
-      },
-      insert: {
-        label: '✓ Apply',
-        title: 'execute and record in data.sql',
-        sqlSel: '#insert-sql',
-        run: async sql => {
-          const ok = await hooks.runScript(sql, 'builder: insert', { journal: true });
-          if (ok) hooks.appendData(sql);
-          return ok;
-        }
-      },
-      update: {
-        label: '✓ Apply',
-        title: 'execute against the project database',
-        sqlSel: '#update-sql',
-        run: sql => hooks.runScript(sql, 'builder: update', { journal: true })
-      },
-      delete: {
-        label: '✓ Apply',
-        title: 'execute against the project database',
-        sqlSel: '#delete-sql',
-        run: sql => hooks.runScript(sql, 'builder: delete', { journal: true })
-      },
-      // CREATE and ALTER live in the IDE's Tables designer (⊞ database tab)
-    };
-
-    const currentMode = () => {
-      const t = d.querySelector('.mode-tab.active');
-      const m = t ? t.id.replace('tab-', '') : 'select';
-      return ACTIONS[m] ? m : 'select';
-    };
-
-    /* generated SQL, comment lines stripped (placeholders/warnings) */
-    const currentSQL = () => {
-      const a = ACTIONS[currentMode()];
-      return panelText(a.sqlSel).split('\n').filter(l => !l.trim().startsWith('--')).join('\n').trim();
-    };
-
-    /* ---- the single action bar ---- */
-    const bar = d.createElement('div');
-    bar.id = 'ide-actionbar';
-    const peek = d.createElement('span');
-    peek.className = 'sqlpeek';
-    const actBtn = d.createElement('button');
-    actBtn.className = 'btn primary small';
-    bar.appendChild(peek);
-    bar.appendChild(actBtn);
-    d.body.appendChild(bar);
-
-    function refreshBar() {
-      const a = ACTIONS[currentMode()];
-      actBtn.textContent = a.label;
-      actBtn.title = a.title;
-      const sql = currentSQL();
-      peek.textContent = sql.replace(/\s+/g, ' ');
-      actBtn.disabled = !splitSQL(sql).length;
-    }
-
-    actBtn.addEventListener('click', async () => {
-      const a = ACTIONS[currentMode()];
-      const sql = currentSQL();
-      if (!splitSQL(sql).length) return;
-      actBtn.disabled = true;
-      try { await a.run(sql); } finally { refreshBar(); }
-    });
-
-    // keep the bar current: mode switches + any change inside the builder
-    d.addEventListener('click', () => setTimeout(refreshBar, 0));
-    d.addEventListener('input', () => setTimeout(refreshBar, 0));
-    d.addEventListener('change', () => setTimeout(refreshBar, 0));
-    refreshBar();
 
     api.ready = true;
     if (api._pending != null) {
