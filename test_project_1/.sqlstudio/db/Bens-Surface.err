@@ -1,0 +1,15 @@
+2026-07-12T09:37:14.622998Z 0 [System] [MY-015017] [Server] MySQL Server Initialization - start.
+2026-07-12T09:37:14.627665Z 0 [System] [MY-013169] [Server] C:\Files\Projects\code\sql-studio\app\src-tauri\resources\engine\bin\mysqld.exe (mysqld 8.4.10) initializing of server in progress as process 31488
+2026-07-12T09:37:14.661627Z 1 [System] [MY-013576] [InnoDB] InnoDB initialization has started.
+2026-07-12T09:37:14.908934Z 1 [System] [MY-013577] [InnoDB] InnoDB initialization has ended.
+2026-07-12T09:37:15.436515Z 0 [Warning] [MY-013829] [Server] Missing data directory for ICU regular expressions: C:\Files\Projects\code\sql-studio\app\src-tauri\resources\engine\lib\private\.
+2026-07-12T09:37:15.561292Z 5 [Warning] [MY-010453] [Server] root@localhost is created with an empty password ! Please consider switching off the --initialize-insecure option.
+2026-07-12T09:37:17.257314Z 0 [System] [MY-015018] [Server] MySQL Server Initialization - end.
+2026-07-12T09:37:17.354526Z 0 [System] [MY-015015] [Server] MySQL Server - start.
+2026-07-12T09:37:17.521019Z 0 [System] [MY-010116] [Server] C:\Files\Projects\code\sql-studio\app\src-tauri\resources\engine\bin\mysqld.exe (mysqld 8.4.10) starting as process 21964
+2026-07-12T09:37:17.555968Z 1 [System] [MY-013576] [InnoDB] InnoDB initialization has started.
+2026-07-12T09:37:17.749494Z 1 [System] [MY-013577] [InnoDB] InnoDB initialization has ended.
+2026-07-12T09:37:17.978410Z 0 [Warning] [MY-013829] [Server] Missing data directory for ICU regular expressions: C:\Files\Projects\code\sql-studio\app\src-tauri\resources\engine\lib\private\.
+2026-07-12T09:37:17.984443Z 0 [Warning] [MY-010068] [Server] CA certificate ca.pem is self signed.
+2026-07-12T09:37:17.984743Z 0 [System] [MY-013602] [Server] Channel mysql_main configured to support TLS. Encrypted connections are now supported for this channel.
+2026-07-12T09:37:18.013930Z 0 [System] [MY-010931] [Server] C:\Files\Projects\code\sql-studio\app\src-tauri\resources\engine\bin\mysqld.exe: ready for connections. Version: '8.4.10'  socket: ''  port: 57008  MySQL Community Server - GPL.

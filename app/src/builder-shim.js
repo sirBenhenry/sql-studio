@@ -11,7 +11,16 @@ const HIDE_CSS = `
   .hero, footer, #tour, #tour-ring, #tour-backdrop, #tour-box,
   #schema-section, #lang-toggle, #tour-replay { display: none !important; }
   main { padding: 0 14px 40px; max-width: none; }
-  .mode-tabs { margin-top: 8px; }
+  /* mode tabs must fit the narrow pane: wrap, compact, no descriptions */
+  .mode-tabs {
+    margin-top: 8px;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 2px 14px !important;
+    overflow: hidden !important;
+  }
+  .mode-tab { font-size: .82rem !important; padding: 0 1px 8px !important; white-space: nowrap; }
+  .mode-tab span { display: none !important; }   /* hide "— query data" descriptions */
   /* stack builder over SQL — the pane is a narrow column */
   .workbench { grid-template-columns: 1fr !important; gap: 0 !important; }
   .sql-card { position: static !important; }
