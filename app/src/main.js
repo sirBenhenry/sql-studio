@@ -2,7 +2,7 @@
 // console, the embedded builder, and the sync pipeline glue.
 'use strict';
 
-import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, buildDataSnapshot } from './sync.js';
+import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, buildDataSnapshot, snapshotTableOrder } from './sync.js';
 import { mountBuilder } from './builder-shim.js';
 import { mountGrid } from './grid.js';
 import { mountTablesDesigner, createTableDDL } from './tables-designer.js';
@@ -312,6 +312,44 @@ async function writeSchemaFromModel(model) {
 }
 
 
+/** Rebuild schema.sql from DB truth (SHOW CREATE TABLE, dependency-ordered).
+ *  Used when a partially-applied designer change means the file no longer
+ *  matches reality — the database is the only honest source left. */
+async function syncSchemaFromDb() {
+  if (!engineRunning || !currentDb) return;
+  const t = tabById('schema');
+  if (!t) return;
+  let shown;
+  try { shown = await invoke('db_exec', { sql: 'SHOW TABLES', db: currentDb }); }
+  catch { return; }
+  const ddl = {};
+  for (const row of shown.rows) {
+    try {
+      const r = await invoke('db_exec', { sql: 'SHOW CREATE TABLE `' + row[0] + '`', db: currentDb });
+      if (r.rows.length) ddl[row[0]] = r.rows[0][1] + ';';
+    } catch { /* table vanished mid-sync — skip */ }
+  }
+  const names = Object.keys(ddl);
+  // dependency order so the file rebuilds: parse what we got, sort by FK depth
+  let order = names;
+  try {
+    const parsed = window.parseSchema(names.map(n => ddl[n]).join('\n'));
+    order = snapshotTableOrder(parsed).concat(names.filter(n => !parsed.byName[n]));
+  } catch { /* fall back to SHOW TABLES order */ }
+  const header = 'DROP DATABASE IF EXISTS ' + currentDb + ';\nCREATE DATABASE ' + currentDb + ';\nUSE ' + currentDb + ';\n';
+  const text = '-- schema.sql — the database definition. Edited live by SQL Studio;\n-- you can also type here directly.\n\n' +
+    header + '\n' + order.map(n => ddl[n]).join('\n\n') + (order.length ? '\n' : '');
+  t.content = text;
+  try {
+    await invoke('file_write', { rel: 'schema.sql', content: text });
+    t.savedContent = text;
+    if (activeTab === 'schema') setEditorText(text);
+    renderTabs();
+    logNote('schema.sql re-synced from the live database');
+  } catch (e) { logErr('schema.sql write failed: ' + e); }
+  if (builder) builder.setSchema(text);
+}
+
 let designer = null;
 let dbViewMode = localStorage.getItem('sqlstudio.dbview') || 'view'; // 'view' | 'edit'
 
@@ -357,6 +395,7 @@ function renderDbTab(host) {
     designer = mountTablesDesigner(body, schemaModel(), {
       runScript,
       writeSchema: writeSchemaFromModel,
+      syncFromDb: syncSchemaFromDb,
       openTable: openTableGrid,
       reload: () => { if (activeTab === 'db') renderDbTab(host); },
       toast
@@ -489,6 +528,7 @@ async function runScript(text, source, opts = {}) {
     } catch (e) {
       logErr(String(e));
       if (applied.length && opts.journal) await journal(source + ' (partial)', applied);
+      if (applied.length && opts.onPartial) opts.onPartial(applied.length);
       return false;
     }
   }

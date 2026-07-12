@@ -213,8 +213,26 @@ export function mountTablesDesigner(host, schema, hooks) {
     }
     committing = true;
     try {
-      const ok = await hooks.runScript(stmts.join(';\n') + ';', 'designer: ' + reason, { journal: true });
+      let partial = 0;
+      const ok = await hooks.runScript(stmts.join(';\n') + ';', 'designer: ' + reason,
+        { journal: true, onPartial: n => { partial = n; } });
       if (ok) {
+        // table renames: MySQL re-points dependents' FOREIGN KEYs itself —
+        // follow suit in the model so schema.sql doesn't reference old names
+        const renamed = {};
+        for (const t of model) {
+          if (t.origName) {
+            const now = cleanIdent(t.name, t.origName);
+            if (now !== t.origName) renamed[t.origName] = now;
+          }
+        }
+        if (Object.keys(renamed).length) {
+          for (const t of model) {
+            for (const fk of t.fks || []) {
+              if (renamed[fk.refTable]) fk.refTable = renamed[fk.refTable];
+            }
+          }
+        }
         // column renames: follow them inside kept-verbatim KEY/CHECK lines
         // (MySQL does the same to its indexes on CHANGE)
         for (const t of model) {
@@ -242,7 +260,10 @@ export function mountTablesDesigner(host, schema, hooks) {
         snapshotNames = model.map(t => t.origName);
         render();
       } else {
-        reload(); // DB said no → revert cards to reality
+        // DB said no. If some statements DID apply, the file no longer
+        // matches the database — re-derive it from DB truth before reverting.
+        if (partial > 0 && hooks.syncFromDb) await hooks.syncFromDb();
+        reload(); // revert cards to reality
       }
     } finally {
       committing = false;

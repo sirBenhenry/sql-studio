@@ -216,5 +216,54 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   ck('round-trip model is diff-stable (no phantom MODIFYs)', ran2.length === 0, JSON.stringify(ran2));
 }
 
+// ---- table rename re-points dependents' FKs in the model/file ----
+{
+  const schema3 = parseSchema(
+    'CREATE TABLE person (id INT UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY(id));\n' +
+    'CREATE TABLE task (id INT UNSIGNED NOT NULL AUTO_INCREMENT, person_id INT UNSIGNED NOT NULL,\n' +
+    ' PRIMARY KEY(id), FOREIGN KEY(person_id) REFERENCES person(id));');
+  const ran3 = [];
+  let model3 = null;
+  const host3 = document.createElement('div');
+  document.body.appendChild(host3);
+  mountTablesDesigner(host3, schema3, {
+    runScript: async sql => { ran3.push(sql); return true; },
+    writeSchema: async m => { model3 = m; },
+    openTable: () => {}, reload: () => {}, toast: () => {}
+  });
+  const tIn = [...host3.querySelectorAll('.dz-tname')].find(i => i.value === 'person');
+  tIn.value = 'people';
+  tIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  host3.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('rename emits RENAME TO', ran3.some(s => s.includes('ALTER TABLE `person` RENAME TO `people`')), JSON.stringify(ran3));
+  const taskT = model3.find(t => t.origName === 'task');
+  ck('dependent FK re-pointed to new name', taskT.fks[0].refTable === 'people', JSON.stringify(taskT.fks));
+  ck('regenerated task DDL references new name',
+    createTableDDL(taskT).includes('REFERENCES `people`(`id`)'), createTableDDL(taskT));
+}
+
+// ---- partial failure → schema.sql re-synced from DB truth ----
+{
+  const schema4 = parseSchema('CREATE TABLE a (id INT UNSIGNED NOT NULL AUTO_INCREMENT, x INT, y INT, PRIMARY KEY(id));');
+  let synced = 0, reloaded = 0, wrote = 0;
+  const host4 = document.createElement('div');
+  document.body.appendChild(host4);
+  mountTablesDesigner(host4, schema4, {
+    runScript: async (sql, src, opts) => { if (opts && opts.onPartial) opts.onPartial(1); return false; },
+    writeSchema: async () => { wrote++; },
+    syncFromDb: async () => { synced++; },
+    openTable: () => {}, reload: () => { reloaded++; }, toast: () => {}
+  });
+  const xIn = [...host4.querySelectorAll('.dz-cname')].find(i => i.value === 'x');
+  xIn.value = 'x2';
+  xIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  host4.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('partial failure → syncFromDb called', synced === 1, synced);
+  ck('partial failure → cards reverted', reloaded === 1, reloaded);
+  ck('partial failure → file NOT written from the stale model', wrote === 0, wrote);
+}
+
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);
