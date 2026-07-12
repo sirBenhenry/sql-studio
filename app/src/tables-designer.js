@@ -83,15 +83,46 @@ function sameCol(a, b) {
 function defaultLit(d) {
   d = String(d).trim();
   if (/^\(.*\)$/.test(d)) return d; // parenthesized expression — as-is
-  return /^(-?\d+(\.\d+)?|NOW\(\)|CURRENT_TIMESTAMP|CURDATE\(\)|CURTIME\(\)|TRUE|FALSE|NULL)$/i.test(d)
+  // MySQL rule: only CURRENT_TIMESTAMP may stand bare after DEFAULT; other
+  // functions must be expression defaults in parentheses (8.0.13+)
+  if (/^(NOW\(\)|CURRENT_TIMESTAMP(\(\))?)$/i.test(d)) return 'CURRENT_TIMESTAMP';
+  if (/^(CURDATE\(\)|CURRENT_DATE(\(\))?)$/i.test(d)) return '(CURDATE())';
+  if (/^(CURTIME\(\)|CURRENT_TIME(\(\))?)$/i.test(d)) return '(CURTIME())';
+  return /^(-?\d+(\.\d+)?|TRUE|FALSE|NULL)$/i.test(d)
     ? d.toUpperCase()
     : "'" + d.replace(/'/g, "''") + "'";
+}
+
+/** type arguments, tolerantly read: "3.4" or "6 2" mean DECIMAL(3,4)/(6,2);
+ *  everything non-numeric is stripped for the length-style types */
+export function normalizeArgs(type, args) {
+  let a = String(args || '').trim();
+  if (!a) return '';
+  if (/^(DECIMAL|FLOAT|DOUBLE)$/.test(type)) {
+    return a.replace(/[^\d,.;:/ ]+/g, '').replace(/[.;:/ ]+/g, ',')
+      .replace(/,+/g, ',').replace(/^,|,$/g, '');
+  }
+  return a.replace(/\D+/g, '');
+}
+
+/** a human warning when the args field won't be taken literally */
+export function argsProblem(type, args) {
+  const a = String(args || '').trim();
+  if (!a) return null;
+  const fixed = normalizeArgs(type, a);
+  if (/^(DECIMAL|FLOAT|DOUBLE)$/.test(type)) {
+    return /^\d+(,\d+)?$/.test(a) ? null
+      : 'digits like 6,2 expected — will be used as (' + (fixed || 'nothing') + ')';
+  }
+  return /^\d+$/.test(a) ? null
+    : 'a number expected — will be used as (' + (fixed || 'nothing') + ')';
 }
 
 export function colDDL(c) {
   const name = cleanIdent(c.name, 'col');
   let s = '`' + name + '` ' + c.type;
-  if (String(c.args || '').trim()) s += '(' + String(c.args).trim() + ')';
+  const na = normalizeArgs(c.type, c.args);
+  if (na) s += '(' + na + ')';
   if (c.uns) s += ' UNSIGNED';
   if (c.nn) s += ' NOT NULL';
   if (c.uq) s += ' UNIQUE';
@@ -195,6 +226,10 @@ function computeDiff(model, snapshotNames) {
     }
     for (const fk of t.fks || []) {
       if (!(t.origFkCols || []).includes(fk.col)) {
+        stmts.push('ALTER TABLE ' + tbl + ' ADD ' + fkDDL(fk));
+      } else if (fk._redo) {
+        // rule change: MySQL can't edit FK actions in place — re-create
+        fixups.push({ table: t.origName, col: fk.col, dropFk: true });
         stmts.push('ALTER TABLE ' + tbl + ' ADD ' + fkDDL(fk));
       }
     }
@@ -326,9 +361,10 @@ export function mountTablesDesigner(host, schema, hooks) {
           t.origName = cleanIdent(t.name, t.origName || 'table');
           t.cols = t.cols.filter(c => String(c.name || '').trim());
           // note: c._open survives — a commit must never slam the popup shut
-          for (const c of t.cols) { c.name = cleanIdent(c.name, 'col'); c.orig = { ...c }; delete c.orig.orig; delete c.orig._open; }
+          for (const c of t.cols) { c.name = cleanIdent(c.name, 'col'); c.args = normalizeArgs(c.type, c.args); c.orig = { ...c }; delete c.orig.orig; delete c.orig._open; }
           t.origCols = t.cols.map(c => c.name);
           t.origFkCols = (t.fks || []).map(f => f.col);
+          for (const f of t.fks || []) delete f._redo;
         }
         model = model.filter(t => t.origName);
         snapshotNames = model.map(t => t.origName);
@@ -394,7 +430,18 @@ export function mountTablesDesigner(host, schema, hooks) {
       scheduleCommit('type change');
     });
     row.appendChild(typeSel);
-    row.appendChild(inp('dz-args', c.args, '(…)', v => { c.args = v; }));
+    const argsIn = inp('dz-args', c.args, '(…)', v => {
+      c.args = v;
+      const bad = argsProblem(c.type, v);
+      argsIn.classList.toggle('bad', !!bad);
+      argsIn.title = bad || '';
+    });
+    {
+      const bad = argsProblem(c.type, c.args);
+      argsIn.classList.toggle('bad', !!bad);
+      argsIn.title = bad || '';
+    }
+    row.appendChild(argsIn);
 
     /* property toggles live in the popup; they apply when it closes
        (or when focus leaves the designer — the usual semi-live rule) */
@@ -515,9 +562,34 @@ export function mountTablesDesigner(host, schema, hooks) {
       /* --- foreign key row --- */
       const fkRow = el('div', 'dz-fkrow');
       fkRow.appendChild(el('span', 'dz-fklabel', 'references →'));
+      const cascSel = () => {
+        const s = el('select');
+        for (const [v, label] of [['', '(default)'], ['CASCADE', 'CASCADE'], ['SET NULL', 'SET NULL'], ['RESTRICT', 'RESTRICT']]) {
+          const o = el('option', null, label);
+          o.value = v;
+          s.appendChild(o);
+        }
+        s.value = 'CASCADE';
+        return s;
+      };
       if (existingFk) {
-        fkRow.appendChild(el('span', 'dz-fkinfo', existingFk.refTable + '.' + existingFk.refCol +
-          (existingFk.onUpdate || existingFk.onDelete ? '  (upd ' + (existingFk.onUpdate || '–') + ' / del ' + (existingFk.onDelete || '–') + ')' : '')));
+        fkRow.appendChild(el('span', 'dz-fkinfo', existingFk.refTable + '.' + existingFk.refCol));
+        // the rules stay editable — changing one re-creates the constraint
+        const mkCasc = key => {
+          const s = cascSel();
+          s.value = existingFk[key] || '';
+          s.addEventListener('change', () => {
+            existingFk[key] = s.value || null;
+            existingFk._redo = true;
+            render();
+            commit('change foreign key rule');
+          });
+          return s;
+        };
+        fkRow.appendChild(el('span', 'dz-fklabel', 'on upd'));
+        fkRow.appendChild(mkCasc('onUpdate'));
+        fkRow.appendChild(el('span', 'dz-fklabel', 'on del'));
+        fkRow.appendChild(mkCasc('onDelete'));
         const rmFk = el('button', 'iconbtn', '✕');
         rmFk.title = 'remove this foreign key (the column stays)';
         rmFk.addEventListener('click', () => {
@@ -540,16 +612,6 @@ export function mountTablesDesigner(host, schema, hooks) {
             refSel.appendChild(o);
           }
         }
-        const cascSel = key => {
-          const s = el('select');
-          for (const [v, label] of [['', '(default)'], ['CASCADE', 'CASCADE'], ['SET NULL', 'SET NULL'], ['RESTRICT', 'RESTRICT']]) {
-            const o = el('option', null, label);
-            o.value = v;
-            s.appendChild(o);
-          }
-          s.value = 'CASCADE';
-          return s;
-        };
         const onUpd = cascSel();
         const onDel = cascSel();
         refSel.addEventListener('change', () => {

@@ -482,6 +482,19 @@ mod tests {
         conn.query_drop("ALTER TABLE `nopk` ADD `id` INT UNSIGNED NOT NULL").unwrap();
         conn.query_drop("ALTER TABLE `nopk` ADD PRIMARY KEY(`id`)").unwrap();
 
+        // --- date/time defaults, exactly as the designer emits them:
+        // CURRENT_TIMESTAMP bare; CURDATE/CURTIME as (expression) defaults ---
+        conn.query_drop(
+            "CREATE TABLE dt (\
+             d DATE NOT NULL DEFAULT (CURDATE()),\
+             tm TIME DEFAULT (CURTIME()),\
+             ts DATETIME DEFAULT CURRENT_TIMESTAMP)",
+        )
+        .unwrap();
+        conn.query_drop("ALTER TABLE `dt` MODIFY `d` DATE NOT NULL DEFAULT (CURDATE())")
+            .unwrap();
+        conn.query_drop("INSERT INTO dt () VALUES ()").unwrap();
+
         drop(conn);
         let mut e = Engine { child: Some(child), port, pool: Some(pool), lock_path: None };
         e.shutdown();

@@ -18,7 +18,7 @@ vm.createContext(sb);
 vm.runInContext(readFileSync(join(here, '..', 'src', 'core', 'parser.js'), 'utf8'), sb);
 const parseSchema = sb.window.parseSchema;
 
-const { mountTablesDesigner, createTableDDL } = await import('../src/tables-designer.js');
+const { mountTablesDesigner, createTableDDL, colDDL, normalizeArgs } = await import('../src/tables-designer.js');
 
 let fail = 0;
 const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
@@ -394,6 +394,53 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   await tick(400);
   ck('new col PK → ADD then ADD PRIMARY KEY',
     ran6.some(s => s.includes('ADD `id`') && s.includes('ADD PRIMARY KEY(`id`)')), JSON.stringify(ran6));
+}
+
+// ---- date defaults (the CURDATE 1064 bug) & args normalization ----
+{
+  ck('DATE default → (CURDATE())',
+    colDDL({ name: 'joined', type: 'DATE', args: '', def: 'CURDATE()', nn: true })
+      .includes('DEFAULT (CURDATE())'),
+    colDDL({ name: 'joined', type: 'DATE', args: '', def: 'CURDATE()', nn: true }));
+  ck('TIME default → (CURTIME())',
+    colDDL({ name: 'at', type: 'TIME', args: '', def: 'CURTIME()' }).includes('DEFAULT (CURTIME())'));
+  ck('NOW() default → bare CURRENT_TIMESTAMP',
+    colDDL({ name: 'ts', type: 'DATETIME', args: '', def: 'NOW()' }).includes('DEFAULT CURRENT_TIMESTAMP'));
+  ck('decimal args 3.4 normalized to 3,4',
+    colDDL({ name: 'p', type: 'DECIMAL', args: '3.4' }).includes('DECIMAL(3,4)'),
+    colDDL({ name: 'p', type: 'DECIMAL', args: '3.4' }));
+  ck('length args stripped to digits', normalizeArgs('VARCHAR', ' 50x ') === '50', normalizeArgs('VARCHAR', ' 50x '));
+}
+
+// ---- existing FK: cascade rules stay editable (drop + re-add) ----
+{
+  const schema7 = parseSchema(
+    'CREATE TABLE person (id INT UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY(id));\n' +
+    'CREATE TABLE task (id INT UNSIGNED NOT NULL AUTO_INCREMENT, person_id INT UNSIGNED NOT NULL,\n' +
+    ' PRIMARY KEY(id), FOREIGN KEY(person_id) REFERENCES person(id) ON UPDATE CASCADE ON DELETE SET NULL);');
+  const ran7 = [];
+  const host7 = document.createElement('div');
+  document.body.appendChild(host7);
+  mountTablesDesigner(host7, schema7, {
+    runScript: async sql => { ran7.push(sql); return true; },
+    query: async sql => sql.includes('KEY_COLUMN_USAGE')
+      ? { columns: ['c'], rows: [['task_ibfk_1']] } : { columns: [], rows: [] },
+    writeSchema: async () => {}, openTable: () => {}, reload: () => {}, toast: () => {}
+  });
+  const w7 = [...host7.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === 'person_id');
+  w7.querySelector('.dz-more').click();
+  await tick(50);
+  const w7b = [...host7.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === 'person_id');
+  const cascs = [...w7b.querySelectorAll('.dz-fkrow select')];
+  ck('existing FK shows editable cascade selects', cascs.length === 2 && cascs[1].value === 'SET NULL',
+    cascs.map(s => s.value).join('|'));
+  cascs[1].value = 'RESTRICT';
+  cascs[1].dispatchEvent(new window.Event('change', { bubbles: true }));
+  await tick(300);
+  ck('cascade change → DROP FOREIGN KEY + re-ADD with new rule',
+    ran7.some(s => s.indexOf('DROP FOREIGN KEY `task_ibfk_1`') > -1 &&
+                   s.indexOf('ON UPDATE CASCADE ON DELETE RESTRICT') > s.indexOf('DROP FOREIGN KEY')),
+    JSON.stringify(ran7));
 }
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');

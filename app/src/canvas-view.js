@@ -93,6 +93,18 @@ export function mountCanvasView(host, schema, hooks) {
   /* drag the empty canvas to pan — wide schemas stay reachable without
      sideways scrollbars (which this app bans) */
   host.style.cursor = 'grab';
+
+  /* the wheel pans too: vertical scroll moves the diagram, shift/trackpad
+     deltas move it sideways */
+  let wheelSaveT = null;
+  host.addEventListener('wheel', e => {
+    e.preventDefault();
+    pan.x -= e.shiftKey ? e.deltaY : e.deltaX;
+    pan.y -= e.shiftKey ? 0 : e.deltaY;
+    applyPan();
+    clearTimeout(wheelSaveT);
+    wheelSaveT = setTimeout(persist, 250);
+  }, { passive: false });
   host.addEventListener('pointerdown', e => {
     if (e.target.closest('.cv-card')) return;
     e.preventDefault();

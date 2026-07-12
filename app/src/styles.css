@@ -382,7 +382,9 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 .cv-coltype { color: var(--muted); font-family: var(--mono); font-size: .62rem; flex: 0 0 auto; }
 
 /* ---- tables designer (the live ⊞ database view) ---- */
-.dz-wrap { padding: 14px 16px; }
+/* generous bottom padding: an opened properties popup near the console line
+   can always be scrolled fully into breathing room */
+.dz-wrap { padding: 14px 16px 260px; }
 .dz-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .dz-hint { color: var(--muted); font-size: .8rem; }
 .dz-grid {
@@ -420,6 +422,7 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
   font-family: var(--mono); font-size: .74rem; padding: 4px 6px; outline: none;
 }
 .dz-args:focus, .dz-col select:focus { border-color: var(--accent); }
+.dz-args.bad { border-color: var(--accent); color: var(--accent); }
 .dz-card .flag {
   border: 1px solid var(--line); background: none; color: var(--muted);
   font-family: inherit; font-size: .58rem; font-weight: 700; letter-spacing: .05em;
@@ -432,11 +435,12 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 .dz-colwrap .dz-col { border-bottom: 0; }
 .dz-more { font-weight: 400 !important; white-space: nowrap; }
 
-/* written-out property tags on the column row */
+/* written-out property tags on the column row — filled, so set = selected */
 .dz-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
 .dz-tag {
   font-size: .58rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--muted); border: 1px solid var(--line); padding: 2px 5px; white-space: nowrap;
+  background: var(--ink); color: var(--bg); border: 1px solid var(--ink);
+  padding: 2px 5px; white-space: nowrap;
 }
 
 /* the properties popup (click ✕ or anywhere outside to close & apply) */
