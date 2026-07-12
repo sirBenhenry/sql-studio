@@ -56,6 +56,20 @@
 
 * { box-sizing: border-box; }
 
+/* the hidden attribute must always win — #workspace has display:grid which
+   would otherwise override the UA's [hidden] rule and render both screens */
+[hidden] { display: none !important; }
+
+/* slim, unobtrusive scrollbars everywhere (WebView2 = chromium) */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ink) 35%, transparent); }
+::-webkit-scrollbar-corner { background: transparent; }
+
 html, body {
   height: 100%;
   margin: 0;
@@ -195,6 +209,8 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
   padding: 12px 14px;
   user-select: text;
   tab-size: 2;
+  white-space: pre-wrap;       /* wrap long lines — no sideways scrolling */
+  overflow-x: hidden;
 }
 
 /* ================= console ================= */
@@ -203,7 +219,8 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 .engine-status.err { color: var(--accent); }
 
 #console-log {
-  flex: 1; min-height: 0; overflow: auto;
+  flex: 1; min-height: 0;
+  overflow-y: auto; overflow-x: hidden;   /* never scroll sideways */
   padding: 8px 12px;
   font-family: var(--mono); font-size: .8rem;
   user-select: text;
@@ -213,13 +230,14 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 .log-err { color: var(--accent); white-space: pre-wrap; }
 .log-note { color: var(--muted); font-style: italic; }
 
-.result-table { border-collapse: collapse; margin: 4px 0 10px; }
+.result-table { border-collapse: collapse; margin: 4px 0 10px; max-width: 100%; }
 .result-table th, .result-table td {
   border: 1px solid var(--line);
   padding: 3px 10px;
   font-family: var(--mono); font-size: .76rem;
   text-align: left; vertical-align: top;
-  max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 320px;
+  overflow-wrap: break-word; word-break: break-word;   /* wrap, don't widen */
 }
 .result-table th {
   font-weight: 700; text-transform: uppercase; font-size: .64rem; letter-spacing: .06em;
@@ -237,7 +255,7 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 }
 
 /* ================= view tabs (database, grids) ================= */
-#view-host { position: absolute; inset: 0; overflow: auto; }
+#view-host { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; }
 .ftab.view-tab { font-family: inherit; }
 .tab-x { color: var(--muted); font-size: .7rem; padding: 0 2px; }
 .tab-x:hover { color: var(--accent); }
@@ -276,7 +294,8 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 }
 .grid-title { font-weight: 800; font-size: .9rem; text-transform: uppercase; letter-spacing: .06em; }
 .grid-note { color: var(--muted); font-size: .74rem; flex: 1; }
-.grid-scroll { overflow: auto; padding: 12px 14px; }
+.grid-scroll { overflow-y: auto; overflow-x: hidden; padding: 12px 14px; }
+.grid-scroll .result-table { width: 100%; table-layout: auto; }
 .grid-table td { user-select: text; }
 .grid-table th.pk { color: var(--accent); }
 .grid-table .row-del { border: 0 !important; }

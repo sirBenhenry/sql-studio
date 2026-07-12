@@ -15,7 +15,18 @@ const HIDE_CSS = `
   /* stack builder over SQL — the pane is a narrow column */
   .workbench { grid-template-columns: 1fr !important; gap: 0 !important; }
   .sql-card { position: static !important; }
+  /* no sideways scrolling inside the pane; slim scrollbars */
+  html, body { overflow-x: hidden !important; }
+  .sql-box { white-space: pre-wrap !important; overflow-x: hidden !important; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(127,127,127,.35); border-radius: 4px; }
+  ::-webkit-scrollbar-corner { background: transparent; }
 `;
+
+/* the lite tool's empty-state notes talk about its own step-1 upload panel,
+   which the IDE hides — reword them for the IDE world */
+const LOCK_NOTE = 'No tables yet — design one in the CREATE tab, or type CREATE TABLE statements into schema.sql.';
 
 export function mountBuilder(host, hooks) {
   // Neutralize the lite tool's own persistence before it boots: no tour,
@@ -61,6 +72,9 @@ export function mountBuilder(host, hooks) {
     const style = d.createElement('style');
     style.textContent = HIDE_CSS;
     d.head.appendChild(style);
+
+    // reword the lite tool's "load a database in step 1" empty-state notes
+    for (const n of d.querySelectorAll('.lock-note')) n.textContent = LOCK_NOTE;
 
     const btn = (label, title) => {
       const b = d.createElement('button');
