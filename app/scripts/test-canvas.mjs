@@ -52,10 +52,22 @@ CREATE TABLE task (
   stage.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, clientX: 500, clientY: 300 }));
   window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 440, clientY: 320 }));
   window.dispatchEvent(new window.MouseEvent('pointerup', {}));
-  ck('pan translates the stage', stage.style.transform === 'translate(-60px,20px)', stage.style.transform);
+  ck('pan translates the stage', stage.style.transform === 'translate(-60px,20px) scale(1)', stage.style.transform);
   ck('pan persisted as __pan', savedOut && savedOut.__pan && savedOut.__pan.x === -60 && savedOut.__pan.y === 20,
     JSON.stringify(savedOut && savedOut.__pan));
   ck('positions persisted alongside pan', savedOut && !!savedOut.task, JSON.stringify(Object.keys(savedOut || {})));
+
+  /* ctrl+wheel zooms (cursor-centered); plain wheel pans */
+  const host_ = document.querySelector('#host');
+  host_.dispatchEvent(new window.WheelEvent('wheel', { bubbles: true, ctrlKey: true, deltaY: -100, clientX: 0, clientY: 0 }));
+  ck('ctrl+wheel zooms in', stage.style.transform.includes('scale(1.12'), stage.style.transform);
+  host_.dispatchEvent(new window.WheelEvent('wheel', { bubbles: true, deltaY: 40 }));
+  ck('plain wheel pans, keeps zoom',
+    stage.style.transform.includes('scale(1.12') && !stage.style.transform.includes('translate(-60px,20px)'),
+    stage.style.transform);
+  await new Promise(r => setTimeout(r, 350));
+  ck('zoom persisted in __pan.z', savedOut.__pan && Math.abs(savedOut.__pan.z - 1.12) < 1e-9,
+    JSON.stringify(savedOut.__pan));
 }
 
 /* ---- saved positions respected; unsaved cards placed below them ---- */
@@ -73,7 +85,7 @@ CREATE TABLE task (
   const personBottom = 60 + 30 + 2 * 21 + 8; // y + HEAD_H + rows + pad
   ck('auto-placed card starts below the saved one',
     parseInt(cardOf('category').style.top, 10) >= personBottom, cardOf('category').style.top);
-  ck('saved pan restored', host.querySelector('.cv-stage').style.transform === 'translate(5px,6px)',
+  ck('saved pan restored', host.querySelector('.cv-stage').style.transform === 'translate(5px,6px) scale(1)',
     host.querySelector('.cv-stage').style.transform);
 }
 

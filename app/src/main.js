@@ -374,7 +374,7 @@ function renderDbTab(host) {
   }
   bar.appendChild(seg);
   if (dbViewMode === 'view') {
-    bar.appendChild(el('span', 'dz-hint', 'Foreign keys drawn as lines · drag cards by their header, the background to pan · ▦ opens the data'));
+    bar.appendChild(el('span', 'dz-hint', 'Drag cards by their header, the background to pan · wheel pans, ctrl+wheel zooms · ▦ opens the data'));
     const reset = el('button', 'btn small', 'reset layout');
     reset.title = 'forget dragged positions and lay the diagram out again';
     reset.addEventListener('click', () => {

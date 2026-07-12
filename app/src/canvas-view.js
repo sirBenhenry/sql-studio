@@ -64,11 +64,15 @@ export function mountCanvasView(host, schema, hooks) {
     return;
   }
 
-  /* ---- positions: saved, else layered auto-layout; the whole stage pans ---- */
+  /* ---- positions: saved, else layered auto-layout; the stage pans & zooms ---- */
   const saved = hooks.loadPositions() || {};
   const pan = (saved.__pan && typeof saved.__pan.x === 'number') ? { ...saved.__pan } : { x: 0, y: 0 };
+  pan.z = (typeof pan.z === 'number' && pan.z > 0) ? pan.z : 1;
   delete saved.__pan;
-  const applyPan = () => { stage.style.transform = 'translate(' + pan.x + 'px,' + pan.y + 'px)'; };
+  stage.style.transformOrigin = '0 0';
+  const applyPan = () => {
+    stage.style.transform = 'translate(' + pan.x + 'px,' + pan.y + 'px) scale(' + pan.z + ')';
+  };
   applyPan();
 
   const layers = layerize(tables);
@@ -94,13 +98,23 @@ export function mountCanvasView(host, schema, hooks) {
      sideways scrollbars (which this app bans) */
   host.style.cursor = 'grab';
 
-  /* the wheel pans too: vertical scroll moves the diagram, shift/trackpad
-     deltas move it sideways */
+  /* the wheel pans (shift = sideways); ctrl+wheel zooms on the cursor */
   let wheelSaveT = null;
   host.addEventListener('wheel', e => {
     e.preventDefault();
-    pan.x -= e.shiftKey ? e.deltaY : e.deltaX;
-    pan.y -= e.shiftKey ? 0 : e.deltaY;
+    if (e.ctrlKey) {
+      const r = host.getBoundingClientRect();
+      const cx = e.clientX - r.left, cy = e.clientY - r.top;
+      const oldZ = pan.z;
+      const z = Math.min(2.5, Math.max(0.25, oldZ * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      // keep the diagram point under the cursor exactly where it is
+      pan.x = cx - ((cx - pan.x) / oldZ) * z;
+      pan.y = cy - ((cy - pan.y) / oldZ) * z;
+      pan.z = z;
+    } else {
+      pan.x -= e.shiftKey ? e.deltaY : e.deltaX;
+      pan.y -= e.shiftKey ? 0 : e.deltaY;
+    }
     applyPan();
     clearTimeout(wheelSaveT);
     wheelSaveT = setTimeout(persist, 250);
@@ -163,8 +177,9 @@ export function mountCanvasView(host, schema, hooks) {
       const startX = e.clientX, startY = e.clientY;
       const ox = pos[t.name].x, oy = pos[t.name].y;
       const move = ev => {
-        pos[t.name].x = Math.max(0, ox + ev.clientX - startX);
-        pos[t.name].y = Math.max(0, oy + ev.clientY - startY);
+        // pointer deltas are screen pixels — divide by zoom for stage coords
+        pos[t.name].x = Math.max(0, ox + (ev.clientX - startX) / pan.z);
+        pos[t.name].y = Math.max(0, oy + (ev.clientY - startY) / pan.z);
         card.style.left = pos[t.name].x + 'px';
         card.style.top = pos[t.name].y + 'px';
         drawLines();
