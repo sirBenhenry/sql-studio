@@ -6,6 +6,7 @@ import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry } from './sync.js';
 import { mountBuilder } from './builder-shim.js';
 import { mountGrid } from './grid.js';
 import { mountTablesDesigner, createTableDDL } from './tables-designer.js';
+import { mountCanvasView } from './canvas-view.js';
 
 const { invoke } = window.__TAURI__.core;
 const { open: openDialog } = window.__TAURI__.dialog;
@@ -312,16 +313,60 @@ async function writeSchemaFromModel(model) {
 
 
 let designer = null;
+let dbViewMode = localStorage.getItem('sqlstudio.dbview') || 'view'; // 'view' | 'edit'
 
-async function renderViewTab(t, host) {
-  if (t.id === 'db') {
-    designer = mountTablesDesigner(host, schemaModel(), {
+function canvasPosKey() {
+  return 'sqlstudio.canvas.' + (project ? project.root : '');
+}
+
+function renderDbTab(host) {
+  host.textContent = '';
+  const bar = el('div', 'dbtab-bar');
+  const seg = el('div', 'seg');
+  for (const [v, label] of [['view', 'View'], ['edit', 'Edit']]) {
+    const b = el('button', null, label);
+    b.classList.toggle('active', dbViewMode === v);
+    b.addEventListener('click', () => {
+      if (dbViewMode === v) return;
+      dbViewMode = v;
+      localStorage.setItem('sqlstudio.dbview', v);
+      renderDbTab(host);
+    });
+    seg.appendChild(b);
+  }
+  bar.appendChild(seg);
+  if (dbViewMode === 'view') {
+    bar.appendChild(el('span', 'dz-hint', 'Foreign keys drawn as lines · drag cards by their header · ▦ opens the data'));
+  }
+  host.appendChild(bar);
+
+  const body = el('div', 'dbtab-body');
+  host.appendChild(body);
+
+  if (dbViewMode === 'view') {
+    mountCanvasView(body, schemaModel(), {
+      openTable: openTableGrid,
+      loadPositions() {
+        try { return JSON.parse(localStorage.getItem(canvasPosKey())) || {}; } catch { return {}; }
+      },
+      savePositions(pos) {
+        try { localStorage.setItem(canvasPosKey(), JSON.stringify(pos)); } catch { /* ignore */ }
+      }
+    });
+  } else {
+    designer = mountTablesDesigner(body, schemaModel(), {
       runScript,
       writeSchema: writeSchemaFromModel,
       openTable: openTableGrid,
-      reload: () => { if (activeTab === 'db') renderViewTab(tabById('db'), viewHost()); },
+      reload: () => { if (activeTab === 'db') renderDbTab(host); },
       toast
     });
+  }
+}
+
+async function renderViewTab(t, host) {
+  if (t.id === 'db') {
+    renderDbTab(host);
   } else if (t.id.startsWith('t:')) {
     const name = t.id.slice(2);
     const model = schemaModel();

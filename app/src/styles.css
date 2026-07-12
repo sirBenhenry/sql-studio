@@ -325,6 +325,55 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 }
 .keytag.fk { color: var(--muted); }
 
+/* ---- ⊞ database tab: View | Edit switcher ---- */
+.dbtab-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--bg); z-index: 5;
+}
+.dbtab-body { position: relative; }
+
+/* ---- canvas view (clean diagram with FK lines) ---- */
+.cv-stage { position: relative; min-width: 100%; min-height: 300px; }
+.cv-lines { position: absolute; top: 0; left: 0; pointer-events: none; }
+.cv-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: .65;
+}
+.cv-dot { fill: var(--accent); }
+.cv-card {
+  position: absolute;
+  width: 210px;
+  background: var(--bg);
+  border: 1px solid var(--line); border-top: 2px solid var(--rule);
+  font-size: .74rem;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+}
+.cv-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  cursor: grab; user-select: none;
+  height: 30px;
+}
+.cv-head:active { cursor: grabbing; }
+.cv-name {
+  font-weight: 800; font-size: .72rem;
+  text-transform: uppercase; letter-spacing: .06em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cv-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 0 10px;
+  height: 21px;
+}
+.cv-row + .cv-row { border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+.cv-colname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-coltype { color: var(--muted); font-family: var(--mono); font-size: .62rem; flex: 0 0 auto; }
+
 /* ---- tables designer (the live ⊞ database view) ---- */
 .dz-wrap { padding: 14px 16px; }
 .dz-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
