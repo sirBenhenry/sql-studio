@@ -19,6 +19,7 @@ pub struct Engine {
     child: Option<Child>,
     port: u16,
     pool: Option<Pool>,
+    lock_path: Option<PathBuf>,
 }
 
 impl Drop for Engine {
@@ -52,6 +53,9 @@ impl Engine {
                     _ => std::thread::sleep(Duration::from_millis(150)),
                 }
             }
+        }
+        if let Some(lock) = self.lock_path.take() {
+            let _ = std::fs::remove_file(lock);
         }
         self.port = 0;
     }
@@ -194,10 +198,24 @@ fn value_to_string(v: Value) -> Option<String> {
     }
 }
 
+/// The image name (e.g. "mysqld.exe") of a live process, or None if no such
+/// process exists. Used to avoid killing an innocent PID-reuse victim.
+fn pid_image_name(pid: u32) -> Option<String> {
+    let mut cmd = Command::new("tasklist");
+    cmd.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
+    no_window(&mut cmd);
+    let out = cmd.output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let line = text.lines().find(|l| l.contains(','))?;
+    let name = line.split(',').next()?.trim().trim_matches('"').to_string();
+    if name.is_empty() { None } else { Some(name) }
+}
+
 /// If a previous SQL Studio session died without a clean shutdown, its mysqld
 /// keeps running and holds the datadir lock — a new engine would then hang at
 /// startup. mysqld writes `<hostname>.pid` into the datadir; kill that stale
-/// process before starting ours.
+/// process before starting ours — but only if the PID really is a mysqld
+/// (PIDs get reused; the file may be ancient).
 fn reclaim_stale_engine(datadir: &Path) {
     let Ok(entries) = std::fs::read_dir(datadir) else { return };
     for e in entries.flatten() {
@@ -205,10 +223,15 @@ fn reclaim_stale_engine(datadir: &Path) {
         if p.extension().map(|x| x == "pid").unwrap_or(false) {
             if let Ok(pid_txt) = std::fs::read_to_string(&p) {
                 if let Ok(pid) = pid_txt.trim().parse::<u32>() {
-                    let mut cmd = Command::new("taskkill");
-                    cmd.args(["/PID", &pid.to_string(), "/F"]);
-                    no_window(&mut cmd);
-                    let _ = cmd.output(); // best-effort; fails harmlessly if gone
+                    let is_mysqld = pid_image_name(pid)
+                        .map(|n| n.eq_ignore_ascii_case("mysqld.exe"))
+                        .unwrap_or(false);
+                    if is_mysqld {
+                        let mut cmd = Command::new("taskkill");
+                        cmd.args(["/PID", &pid.to_string(), "/F"]);
+                        no_window(&mut cmd);
+                        let _ = cmd.output(); // best-effort; fails harmlessly if gone
+                    }
                 }
             }
             let _ = std::fs::remove_file(&p);
@@ -226,8 +249,37 @@ pub async fn db_start(
     eng.shutdown(); // one engine at a time; switching projects restarts it
 
     let engine = engine_dir(&app)?;
-    let datadir = PathBuf::from(&project_root).join(".sqlstudio").join("db");
+    let sdir = PathBuf::from(&project_root).join(".sqlstudio");
+    let datadir = sdir.join("db");
+
+    // one window per project: a live lock holder means this project's engine
+    // belongs to someone else — refuse instead of killing it out from under them
+    let lockfile = sdir.join("studio.lock");
+    if let Ok(txt) = std::fs::read_to_string(&lockfile) {
+        if let Ok(pid) = txt.trim().parse::<u32>() {
+            if pid != std::process::id() && pid_image_name(pid).is_some() {
+                return Err(format!(
+                    "this project is already open in another SQL Studio window (pid {pid}). \
+                     If that's not true, delete .sqlstudio\\studio.lock and try again."
+                ));
+            }
+        }
+    }
+    std::fs::create_dir_all(&sdir).map_err(|e| e.to_string())?;
+    std::fs::write(&lockfile, std::process::id().to_string()).map_err(|e| e.to_string())?;
+    eng.lock_path = Some(lockfile);
+
     if !datadir.join("mysql.ibd").exists() {
+        // an interrupted --initialize leaves debris that fails every retry —
+        // a datadir without mysql.ibd is unusable anyway, so clear it
+        if datadir.exists()
+            && std::fs::read_dir(&datadir)
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false)
+        {
+            std::fs::remove_dir_all(&datadir)
+                .map_err(|e| format!("could not clear a broken datadir: {e}"))?;
+        }
         initialize_datadir(&engine, &datadir)?;
     } else {
         reclaim_stale_engine(&datadir);
@@ -310,7 +362,7 @@ mod tests {
             conn.query_drop("INSERT INTO item (name) VALUES ('lamp'),('chair')")
                 .unwrap();
             drop(conn);
-            let mut e = Engine { child: Some(child), port, pool: Some(pool) };
+            let mut e = Engine { child: Some(child), port, pool: Some(pool), lock_path: None };
             e.shutdown();
         }
 
@@ -328,7 +380,7 @@ mod tests {
                 .unwrap();
             assert_eq!(names, vec!["lamp".to_string(), "chair".to_string()]);
             drop(conn);
-            let mut e = Engine { child: Some(child), port, pool: Some(pool) };
+            let mut e = Engine { child: Some(child), port, pool: Some(pool), lock_path: None };
             e.shutdown();
         }
         let _ = std::fs::remove_dir_all(&proj);
@@ -359,6 +411,7 @@ mod tests {
             child: Some(child),
             port,
             pool: None,
+            lock_path: None,
         };
 
         let pool = wait_ready(port, Duration::from_secs(60)).expect("ready");
