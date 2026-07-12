@@ -294,10 +294,24 @@ mod tests {
 }
 
 #[tauri::command]
-pub fn db_exec(state: tauri::State<EngineState>, sql: String) -> Result<ExecResult, String> {
+pub fn db_exec(
+    state: tauri::State<EngineState>,
+    sql: String,
+    db: Option<String>,
+) -> Result<ExecResult, String> {
     let eng = state.0.lock().map_err(|e| e.to_string())?;
     let pool = eng.pool.as_ref().ok_or("engine not running")?;
     let mut conn = pool.get_conn().map_err(|e| e.to_string())?;
+
+    // pooled connections don't remember USE across checkouts — select the
+    // project's current database explicitly for every statement
+    if let Some(db) = db {
+        let ident = db.replace('`', "");
+        if !ident.is_empty() {
+            conn.query_drop(format!("USE `{ident}`"))
+                .map_err(|e| e.to_string())?;
+        }
+    }
 
     let start = Instant::now();
     let result = conn.query_iter(&sql).map_err(|e| e.to_string())?;

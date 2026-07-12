@@ -4,9 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**SQL Studio** — a visual, "Lego-style" builder for MySQL, shipped as a **single self-contained HTML file** (`sql-studio.html`). Everything (HTML, CSS, all JavaScript, and a demo database) is inlined into that one file. It runs **fully offline** by opening it in a browser — there is **no build step, no bundler, no dependencies, no server**. Do not add a build system or split it into modules: `file://` usage forbids ES modules/CORS, so the single-file, plain-`<script>` design is intentional.
+**SQL Studio** — a visual, "Lego-style" MySQL tool. The repo holds **two worlds**:
 
-`versions/vN/` holds frozen snapshots of prior releases; the root `sql-studio.html` is the working (newest) build.
+1. **The lite tool** (`sql-studio.html`) — a single self-contained HTML file. Everything (HTML, CSS, all JavaScript, demo database) is inlined. Runs fully offline by opening in a browser: **no build step, no bundler, no dependencies**. Do not add a build system or split it into modules — `file://` forbids ES modules/CORS; the single-file plain-`<script>` design is intentional. **This file is also the source of truth for the parser/generator/builder logic** consumed by the IDE (see below).
+2. **The IDE** (`app/`) — a Tauri 2 Windows app (Rust host + webview) where a project folder IS a live database: bundled portable MySQL sandbox per project, `schema.sql`/`data.sql`/`journal.sql`/`queries/`, builder pane (the lite tool embedded via iframe + shim), console with result tables. Architecture: see `PLAN.md`.
+
+`versions/vN/` holds frozen snapshots of the lite tool; the root `sql-studio.html` is the working build.
+
+## The extraction contract (critical)
+
+The IDE **never forks** the builder logic. `app/scripts/extract-core.mjs` copies the lite tool's script blocks **verbatim** into `app/src/core/` (`demo.js`, `parser.js`, `sqlgen.js`) plus the whole file as `core/builder.html` (embedded as an iframe by `app/src/builder-shim.js`, which adapts it from the outside — hides chrome, adds Run/Apply buttons, feeds schema). After ANY edit to `sql-studio.html`: re-run the extraction, then `node app/scripts/test-core.mjs` (zero-drift gate) and `node app/scripts/test-shim.mjs`. Never hand-edit `app/src/core/*`.
+
+## IDE development (`app/`)
+
+- Dev loop: `cd app && npx tauri dev`. Build: `npx tauri build --debug --no-bundle` (exe in `src-tauri/target/debug/`), installer via `npx tauri build`.
+- The bundled engine is NOT committed: `node scripts/fetch-engine.mjs` downloads + strips MySQL Community (~90 MB) into `src-tauri/resources/engine/`. Engine behavior is tested by `cargo test --lib` in `src-tauri/` (full init→start→query→shutdown round-trip).
+- Frontend is plain ES modules served from `app/src` (no bundler yet): `main.js` (bootstrap, tabs, console, sync glue), `sync.js` (splitSQL/journal helpers — tested by `scripts/test-sync.mjs`), `builder-shim.js`.
+- Rust: `src-tauri/src/project.rs` (project folder = file set, guarded IO), `src-tauri/src/engine.rs` (engine-adapter: per-project mysqld on a free localhost port, datadir in `<project>/.sqlstudio/db`).
 
 ## Editing & running
 

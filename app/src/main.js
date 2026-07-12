@@ -1,6 +1,9 @@
 // SQL Studio (IDE) — app bootstrap: project lifecycle, file tabs, editor,
-// console shell. The visual builder + sync engine mount here in later phases.
+// console, the embedded builder, and the sync pipeline glue.
 'use strict';
+
+import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry } from './sync.js';
+import { mountBuilder } from './builder-shim.js';
 
 const { invoke } = window.__TAURI__.core;
 const { open: openDialog } = window.__TAURI__.dialog;
@@ -40,7 +43,7 @@ $('#lang-toggle').addEventListener('click', e => {
   LANG = opt.dataset.lang;
   localStorage.setItem('sqlstudio.lang', LANG);
   applyLang();
-  // builder re-render hooks in on port (P3)
+  if (builder) builder.setLang(LANG);
 });
 applyLang();
 
@@ -156,6 +159,11 @@ editor.addEventListener('input', () => {
   if (!t || t.readonly) return;
   t.content = editor.value;
   renderTabs();
+  // schema edits flow into the builder's understanding (debounced)
+  if (t.id === 'schema' && builder) {
+    clearTimeout(editor._schemaT);
+    editor._schemaT = setTimeout(() => builder.setSchema(t.content), 600);
+  }
 });
 
 async function saveActive() {
@@ -191,14 +199,73 @@ document.addEventListener('keydown', e => {
   }
 });
 
-/* ================= engine ================= */
+/* ================= engine + sync pipeline ================= */
 
 let engineRunning = false;
+let currentDb = null;   // the project's active database (tracked client-side)
+let builder = null;     // the embedded builder's api (mounted at boot)
+
+const SYSTEM_DBS = new Set(['mysql', 'information_schema', 'performance_schema', 'sys']);
 
 function setEngineStatus(text, cls) {
   const s = $('#engine-status');
   s.textContent = text;
   s.className = 'engine-status' + (cls ? ' ' + cls : '');
+}
+
+/** run ONE statement with database-context tracking */
+async function runStatement(sql) {
+  const useM = sql.match(/^USE\s+`?([\w$]+)`?\s*$/i);
+  if (useM) {
+    currentDb = useM[1];
+    logOk('database: ' + currentDb);
+    return { columns: [], rows: [], affected: 0, elapsed_ms: 0 };
+  }
+  const res = await invoke('db_exec', {
+    sql,
+    db: isDbAgnostic(sql) ? null : currentDb
+  });
+  const cdb = sql.match(/^CREATE\s+DATABASE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([\w$]+)`?/i);
+  if (cdb) currentDb = cdb[1];
+  const ddb = sql.match(/^DROP\s+DATABASE\s+(?:IF\s+EXISTS\s+)?`?([\w$]+)`?/i);
+  if (ddb && currentDb === ddb[1]) currentDb = null;
+  return res;
+}
+
+/** run a whole script (splits statements); logs everything; optional journal.
+ *  Returns true only if every statement succeeded. */
+async function runScript(text, source, opts = {}) {
+  const stmts = splitSQL(text || '');
+  if (!stmts.length) { logErr('nothing to run'); return false; }
+  if (!engineRunning) { logErr('engine not running'); return false; }
+  const applied = [];
+  for (const stmt of stmts) {
+    logStmt(stmt);
+    try {
+      const res = await runStatement(stmt);
+      logResult(res);
+      applied.push(stmt);
+    } catch (e) {
+      logErr(String(e));
+      if (applied.length && opts.journal) await journal(source + ' (partial)', applied);
+      return false;
+    }
+  }
+  if (opts.journal) await journal(source, applied);
+  return true;
+}
+
+async function journal(source, statements) {
+  const entry = journalEntry(source, statements);
+  try {
+    await invoke('journal_append', { entry });
+    const t = tabById('journal');
+    if (t) {
+      t.content += entry;
+      t.savedContent = t.content;
+      if (activeTab === 'journal') editor.value = t.content;
+    }
+  } catch (e) { logErr('journal write failed: ' + e); }
 }
 
 async function startEngine(root) {
@@ -208,12 +275,39 @@ async function startEngine(root) {
     engineRunning = true;
     setEngineStatus('● engine: running on 127.0.0.1:' + info.port, 'ok');
     $('#status-right').textContent = 'engine :' + info.port;
-    logNote('engine ready — this project is now a live database');
+    logNote('engine ready — this project is a live database');
+    await reconcile();
   } catch (e) {
     engineRunning = false;
     setEngineStatus('● engine: failed', 'err');
     logErr(String(e));
   }
+}
+
+/** On open: a fresh sandbox gets built from schema.sql + data.sql; an
+ *  existing one just resolves the current database. The builder is fed
+ *  the schema either way. */
+async function reconcile() {
+  const schemaText = tabById('schema') ? tabById('schema').content : '';
+  try {
+    const res = await invoke('db_exec', { sql: 'SHOW DATABASES', db: null });
+    const userDbs = res.rows.map(r => r[0]).filter(d => d && !SYSTEM_DBS.has(d));
+    if (!userDbs.length && splitSQL(schemaText).length) {
+      logNote('fresh sandbox — building the database from schema.sql…');
+      const ok = await runScript(schemaText, 'seed: schema.sql', { journal: false });
+      const dataText = tabById('data') ? tabById('data').content : '';
+      if (ok && splitSQL(dataText).length) {
+        await runScript(dataText, 'seed: data.sql', { journal: false });
+      }
+      if (ok) logOk('project database built from files');
+    } else {
+      currentDb = findCurrentDb(schemaText) || userDbs[0] || null;
+      if (currentDb) logNote('database: ' + currentDb);
+    }
+  } catch (e) {
+    logErr('reconcile failed: ' + e);
+  }
+  if (builder) builder.setSchema(schemaText);
 }
 
 /* ================= console ================= */
@@ -270,25 +364,54 @@ function logResult(res) {
   }
 }
 
-export async function runSQL(sql) {
-  logStmt(sql);
-  if (!engineRunning) { logErr('engine not running'); return null; }
-  try {
-    const res = await invoke('db_exec', { sql });
-    logResult(res);
-    return res;
-  } catch (e) {
-    logErr(String(e));
-    return null;
-  }
-}
-
 $('#console-input').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const sql = e.target.value.trim();
   if (!sql) return;
   e.target.value = '';
-  runSQL(sql);
+  // typed console statements are ad-hoc: executed but not journaled
+  runScript(sql, 'console', { journal: false });
+});
+
+/* ================= builder mount + sync hooks ================= */
+
+async function appendData(sql) {
+  const t = tabById('data');
+  if (!t) return;
+  let cur = t.content;
+  if (!cur.endsWith('\n')) cur += '\n';
+  cur += sql.trim() + '\n';
+  t.content = cur;
+  try {
+    await invoke('file_write', { rel: 'data.sql', content: cur });
+    t.savedContent = cur;
+    if (activeTab === 'data') editor.value = cur;
+    renderTabs();
+  } catch (e) { logErr('data.sql write failed: ' + e); }
+}
+
+/** the builder changed the schema (CREATE/ALTER applied): schema.sql follows */
+async function schemaChanged(newSchemaText) {
+  const t = tabById('schema');
+  if (!t) return;
+  t.content = newSchemaText;
+  try {
+    await invoke('file_write', { rel: 'schema.sql', content: newSchemaText });
+    t.savedContent = newSchemaText;
+    if (activeTab === 'schema') editor.value = newSchemaText;
+    renderTabs();
+    logNote('schema.sql updated');
+  } catch (e) { logErr('schema.sql write failed: ' + e); }
+}
+
+builder = mountBuilder($('#builder-host'), {
+  runScript,
+  appendData,
+  schemaChanged,
+  onReady() {
+    builder.setLang(LANG);
+    if (project) builder.setSchema(tabById('schema') ? tabById('schema').content : '');
+  }
 });
 
 /* ================= splitters ================= */

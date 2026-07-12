@@ -26,6 +26,10 @@ for (const [f, i] of Object.entries(files)) {
   ck(`${f} identical to lite block ${i}`, extracted === blocks[i],
     extracted === blocks[i] ? '' : `lengths ${extracted.length} vs ${blocks[i].length}`);
 }
+const builderHtml = readFileSync(join(coreDir, 'builder.html'), 'utf8')
+  .replace(/^<!-- AUTO-EXTRACTED[^\n]*-->\n/, '');
+ck('builder.html identical to lite tool', builderHtml === html,
+  builderHtml === html ? '' : `lengths ${builderHtml.length} vs ${html.length}`);
 
 // functional smoke in a bare VM
 const sb = { window: {} };
