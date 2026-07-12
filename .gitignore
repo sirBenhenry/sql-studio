@@ -8,3 +8,6 @@ SELECT.zip
 Thumbs.db
 .DS_Store
 *.swp
+
+# local SQL Studio test projects (a project folder contains a live MySQL datadir)
+test_project*/
