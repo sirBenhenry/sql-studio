@@ -374,7 +374,14 @@ function renderDbTab(host) {
   }
   bar.appendChild(seg);
   if (dbViewMode === 'view') {
-    bar.appendChild(el('span', 'dz-hint', 'Foreign keys drawn as lines · drag cards by their header · ▦ opens the data'));
+    bar.appendChild(el('span', 'dz-hint', 'Foreign keys drawn as lines · drag cards by their header, the background to pan · ▦ opens the data'));
+    const reset = el('button', 'btn small', 'reset layout');
+    reset.title = 'forget dragged positions and lay the diagram out again';
+    reset.addEventListener('click', () => {
+      localStorage.removeItem(canvasPosKey());
+      renderDbTab(host);
+    });
+    bar.appendChild(reset);
   }
   host.appendChild(bar);
 

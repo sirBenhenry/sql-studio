@@ -64,19 +64,54 @@ export function mountCanvasView(host, schema, hooks) {
     return;
   }
 
-  /* ---- positions: saved, else layered auto-layout ---- */
+  /* ---- positions: saved, else layered auto-layout; the whole stage pans ---- */
   const saved = hooks.loadPositions() || {};
+  const pan = (saved.__pan && typeof saved.__pan.x === 'number') ? { ...saved.__pan } : { x: 0, y: 0 };
+  delete saved.__pan;
+  const applyPan = () => { stage.style.transform = 'translate(' + pan.x + 'px,' + pan.y + 'px)'; };
+  applyPan();
+
   const layers = layerize(tables);
   const cols = {};
   const pos = {};
+  // never auto-place on top of cards the user positioned by hand
+  let baseY = PAD;
+  for (const t of tables) {
+    if (saved[t.name]) baseY = Math.max(baseY, saved[t.name].y + cardHeight(t) + GAP_Y);
+  }
   for (const t of tables) {
     if (saved[t.name]) { pos[t.name] = { ...saved[t.name] }; continue; }
     const L = layers[t.name] || 0;
     cols[L] = cols[L] || [];
-    const y = cols[L].reduce((acc, name) => acc + cardHeight(tables.find(x => x.name === name)) + GAP_Y, PAD);
+    const y = cols[L].reduce((acc, name) => acc + cardHeight(tables.find(x => x.name === name)) + GAP_Y, baseY);
     cols[L].push(t.name);
     pos[t.name] = { x: PAD + L * (CARD_W + GAP_X), y };
   }
+
+  const persist = () => hooks.savePositions({ ...pos, __pan: { ...pan } });
+
+  /* drag the empty canvas to pan — wide schemas stay reachable without
+     sideways scrollbars (which this app bans) */
+  host.style.cursor = 'grab';
+  host.addEventListener('pointerdown', e => {
+    if (e.target.closest('.cv-card')) return;
+    e.preventDefault();
+    host.style.cursor = 'grabbing';
+    const sx = e.clientX, sy = e.clientY, ox = pan.x, oy = pan.y;
+    const move = ev => {
+      pan.x = ox + ev.clientX - sx;
+      pan.y = oy + ev.clientY - sy;
+      applyPan();
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      host.style.cursor = 'grab';
+      persist();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
 
   /* ---- cards ---- */
   const cardEls = {};
@@ -125,7 +160,7 @@ export function mountCanvasView(host, schema, hooks) {
       const up = () => {
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
-        hooks.savePositions(pos);
+        persist();
         sizeStage();
       };
       window.addEventListener('pointermove', move);
