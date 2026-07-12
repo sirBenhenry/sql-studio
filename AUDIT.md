@@ -4,7 +4,33 @@ A complete read of the IDE (`app/src/*`, `app/src-tauri/src/*`, shell, styles, s
 plus the extraction/parser surface it depends on. Ranked by severity. Baseline:
 all five JS suites + both cargo tests green before and after this audit.
 
-Fixed during the audit (commit alongside this file):
+## STATUS after the implementation pass (same day, commits 2351e7c…)
+
+**FIXED — Severity 1: all nine.**
+#1 parser captures DEFAULT/UNIQUE/CHECK/cascades + raw KEY/CHECK passthrough
+(`extras`), designer round-trip lossless · #2 data.sql is a live snapshot
+(dependency-ordered dump after every journaled change; journal replay made
+unnecessary) · #3 renames re-point FK refTable/refCol + KEY lines · #4 partial
+commits re-sync schema.sql from SHOW CREATE TABLE · #5 CHECK/UNIQUE drop-then-
+re-add via information_schema (real-engine cargo test) · #6 PK flag gated +
+ADD PRIMARY KEY emitted · #7 canvas pans by background-drag, reset-layout
+button · #8 debris datadir cleared before initialize · #9 studio.lock +
+mysqld-verified reclaim.
+
+**FIXED — lower severity:** #11 (FK removal, self-FK), #16 (grid blur commits,
+Escape cancels, no-change no-op), #18 (console ↑/↓ history), #22 (new cards
+placed below saved ones; stale positions pruned on save), #23 (askDbName
+listener leak), #24 (splitter text-selection).
+
+**STILL OPEN:** #10 (typing in schema.sql → DB diff — the missing P4 half),
+#12 (unsaved-changes guard on close), #13 (currentDb fragility), #14 (dead
+code cleanup), #15 (import-a-dump), #17 (grid: empty-string vs NULL,
+pagination, sort/filter, console echo), #19 (builder Apply success feedback),
+#20/#21 (human error hints — P8), #25–#28 (perf/robustness niceties).
+
+---
+
+Fixed during the audit itself (commit 742d93d):
 - stale builder empty-state text pointed to the removed CREATE tab (`builder-shim.js`)
 - the grid now respects the Settings row limit instead of a hardcoded 500 (`grid.js`, `main.js`)
 

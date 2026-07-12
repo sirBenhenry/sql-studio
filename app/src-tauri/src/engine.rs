@@ -386,6 +386,108 @@ mod tests {
         let _ = std::fs::remove_dir_all(&proj);
     }
 
+    /// The exact SQL shapes the tables designer emits for its constraint
+    /// lifecycle, validated against the real engine: drop-then-re-add CHECK
+    /// (so ranges can widen), drop a unique index found via STATISTICS,
+    /// drop an FK found via KEY_COLUMN_USAGE, ADD PRIMARY KEY after ADD.
+    #[test]
+    fn designer_constraint_lifecycle_sql() {
+        let engine = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("engine");
+        if !engine.join("bin").join("mysqld.exe").exists() {
+            panic!("engine missing — run: node scripts/fetch-engine.mjs");
+        }
+        let td = std::env::temp_dir().join("sqlstudio-lifecycle-test");
+        let _ = std::fs::remove_dir_all(&td);
+        let datadir = td.join("db");
+        initialize_datadir(&engine, &datadir).expect("initialize");
+
+        let port = free_port().unwrap();
+        let mut cmd = Command::new(engine.join("bin").join("mysqld.exe"));
+        cmd.args(mysqld_args(&engine, &datadir, port));
+        no_window(&mut cmd);
+        let child = cmd.spawn().unwrap();
+        let pool = wait_ready(port, Duration::from_secs(60)).unwrap();
+        let mut conn = pool.get_conn().unwrap();
+
+        conn.query_drop("CREATE DATABASE d").unwrap();
+        conn.query_drop("USE d").unwrap();
+        conn.query_drop(
+            "CREATE TABLE u (\
+             id INT UNSIGNED NOT NULL AUTO_INCREMENT,\
+             code VARCHAR(10) NOT NULL UNIQUE,\
+             qty INT NOT NULL CHECK (`qty` BETWEEN 0 AND 10),\
+             ref_id INT UNSIGNED,\
+             PRIMARY KEY(id),\
+             FOREIGN KEY(ref_id) REFERENCES u(id))",
+        )
+        .unwrap();
+
+        // --- CHECK: look up auto name, drop, re-add wider via MODIFY ---
+        let checks: Vec<String> = conn
+            .query(
+                "SELECT cc.CONSTRAINT_NAME FROM information_schema.CHECK_CONSTRAINTS cc \
+                 JOIN information_schema.TABLE_CONSTRAINTS tc ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA \
+                 AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME \
+                 WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.TABLE_NAME = 'u' \
+                 AND cc.CHECK_CLAUSE LIKE '%`qty`%'",
+            )
+            .unwrap();
+        assert_eq!(checks.len(), 1, "one auto-named check expected");
+        conn.query_drop(format!("ALTER TABLE `u` DROP CHECK `{}`", checks[0]))
+            .unwrap();
+        conn.query_drop("ALTER TABLE `u` MODIFY `qty` INT NOT NULL CHECK (`qty` BETWEEN 0 AND 500)")
+            .unwrap();
+        // widened range must actually be accepted now
+        conn.query_drop("INSERT INTO u (code, qty) VALUES ('a', 400)").unwrap();
+        let n: Vec<u32> = conn
+            .query(
+                "SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS cc \
+                 JOIN information_schema.TABLE_CONSTRAINTS tc ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA \
+                 AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME \
+                 WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.TABLE_NAME = 'u' \
+                 AND cc.CHECK_CLAUSE LIKE '%`qty`%'",
+            )
+            .unwrap();
+        assert_eq!(n[0], 1, "checks must not accumulate");
+
+        // --- UNIQUE: find the single-column unique index and drop it ---
+        let idx: Vec<String> = conn
+            .query(
+                "SELECT INDEX_NAME FROM information_schema.STATISTICS \
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'u' \
+                 AND NON_UNIQUE = 0 AND INDEX_NAME <> 'PRIMARY' \
+                 GROUP BY INDEX_NAME HAVING COUNT(*) = 1 AND MAX(COLUMN_NAME) = 'code'",
+            )
+            .unwrap();
+        assert_eq!(idx.len(), 1, "one unique index on code expected");
+        conn.query_drop(format!("ALTER TABLE `u` DROP INDEX `{}`", idx[0])).unwrap();
+        conn.query_drop("ALTER TABLE `u` MODIFY `code` VARCHAR(10) NOT NULL").unwrap();
+        conn.query_drop("INSERT INTO u (code, qty) VALUES ('a', 1)").unwrap(); // duplicate now fine
+
+        // --- FK: find the constraint name and drop it ---
+        let fks: Vec<String> = conn
+            .query(
+                "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE \
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'u' \
+                 AND COLUMN_NAME = 'ref_id' AND REFERENCED_TABLE_NAME IS NOT NULL",
+            )
+            .unwrap();
+        assert_eq!(fks.len(), 1, "one FK on ref_id expected");
+        conn.query_drop(format!("ALTER TABLE `u` DROP FOREIGN KEY `{}`", fks[0])).unwrap();
+
+        // --- PK on a fresh table via ADD then ADD PRIMARY KEY ---
+        conn.query_drop("CREATE TABLE nopk (a INT)").unwrap();
+        conn.query_drop("ALTER TABLE `nopk` ADD `id` INT UNSIGNED NOT NULL").unwrap();
+        conn.query_drop("ALTER TABLE `nopk` ADD PRIMARY KEY(`id`)").unwrap();
+
+        drop(conn);
+        let mut e = Engine { child: Some(child), port, pool: Some(pool), lock_path: None };
+        e.shutdown();
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
     /// Full sandbox round-trip against the bundled engine:
     /// initialize → start → DDL/DML → query → clean shutdown.
     #[test]
