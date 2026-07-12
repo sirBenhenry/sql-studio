@@ -1,0 +1,103 @@
+// Grid + overview logic test in jsdom: mounts the grid against a fake exec
+// that emulates the sandbox, verifies UPDATE/INSERT/DELETE SQL generation,
+// PK-based row addressing, NULL handling, and the read-only fallback.
+import { JSDOM } from 'jsdom';
+
+const dom = new JSDOM('<div id="host"></div><div id="ov"></div>', { url: 'http://localhost/' });
+global.window = dom.window;
+global.document = dom.window.document;
+window.confirm = () => true;
+
+const { mountGrid } = await import('../src/grid.js');
+const { renderOverview } = await import('../src/overview.js');
+
+let fail = 0;
+const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+// fake sandbox: one table, three rows
+const executed = [];
+const journaled = [];
+let rows = [
+  ['1', 'lamp', '12.50'],
+  ['2', 'chair', null],
+  ['3', 'desk', '89.00']
+];
+const hooks = {
+  exec: async sql => {
+    executed.push(sql);
+    if (/^SELECT \* FROM/.test(sql)) return { columns: ['id', 'name', 'price'], rows, affected: 0, elapsed_ms: 1 };
+    return { columns: [], rows: [], affected: 1, elapsed_ms: 1 };
+  },
+  journal: (source, stmts) => journaled.push({ source, stmts })
+};
+
+const tableDef = {
+  name: 'item',
+  columns: [
+    { name: 'id', pk: true, autoInc: true, numeric: true },
+    { name: 'name', pk: false, numeric: false },
+    { name: 'price', pk: false, numeric: true }
+  ],
+  fks: []
+};
+
+const host = document.querySelector('#host');
+mountGrid(host, tableDef, hooks);
+await tick(); await tick();
+
+ck('grid loaded rows', host.querySelectorAll('tbody tr').length === 4, host.querySelectorAll('tbody tr').length); // 3 + new-row
+ck('NULL cell styled', host.querySelector('td.null') && host.querySelector('td.null').textContent === 'NULL');
+ck('PK header marked', host.querySelector('th.pk') && host.querySelector('th.pk').textContent === 'id');
+
+// --- edit a cell: dblclick name of row 2 → type → Enter ---
+const row2 = host.querySelectorAll('tbody tr')[1];
+const nameTd = row2.children[1];
+nameTd.dispatchEvent(new window.Event('dblclick', { bubbles: true }));
+const inp = nameTd.querySelector('input');
+ck('editor appears on dblclick', !!inp);
+inp.value = 'armchair';
+inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+await tick(); await tick();
+const upd = executed.find(s => s.startsWith('UPDATE'));
+ck('UPDATE addressed by PK',
+  upd === "UPDATE `item` SET `name` = 'armchair' WHERE `id` = 2 LIMIT 1", upd);
+ck('update journaled', journaled.some(j => j.source.includes('edit item.name')));
+
+// --- insert via the + row ---
+const newRow = host.querySelector('tr.new-row');
+const inputs = [...newRow.querySelectorAll('input')];
+ck('auto-inc input disabled', inputs[0].disabled);
+inputs[1].value = 'shelf';
+inputs[2].value = '45';
+inputs[1].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+await tick(); await tick();
+const ins = executed.find(s => s.startsWith('INSERT'));
+ck('INSERT skips auto-inc, quotes text, bare number',
+  ins === "INSERT INTO `item` (`name`, `price`) VALUES ('shelf', 45)", ins);
+
+// --- delete row 1 ---
+const delBtn = host.querySelectorAll('tbody tr')[0].querySelector('.row-del button');
+delBtn.click();
+await tick(); await tick();
+const del = executed.find(s => s.startsWith('DELETE'));
+ck('DELETE addressed by PK', del === 'DELETE FROM `item` WHERE `id` = 1 LIMIT 1', del);
+
+// --- read-only when no PK ---
+const host2 = document.createElement('div');
+document.body.appendChild(host2);
+mountGrid(host2, { name: 'nopk', columns: [{ name: 'a' }], fks: [] }, hooks);
+await tick(); await tick();
+ck('no-PK grid is read-only', host2.textContent.includes('read-only'), host2.textContent.slice(0, 120));
+ck('no + row without PK', !host2.querySelector('tr.new-row'));
+
+// --- overview ---
+const schema = { tables: [tableDef, { name: 'genre', columns: [{ name: 'id', pk: true }], fks: [] }], byName: {} };
+let opened = null;
+renderOverview(document.querySelector('#ov'), schema, { item: 3, genre: 0 }, { openTable: n => opened = n });
+ck('overview renders cards', document.querySelectorAll('#ov .ov-card').length === 2);
+document.querySelector('#ov .ov-card').click();
+ck('card click opens table', opened === 'item', opened);
+
+console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
+process.exit(fail ? 1 : 0);

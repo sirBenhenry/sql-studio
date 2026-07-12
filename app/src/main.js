@@ -4,6 +4,8 @@
 
 import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry } from './sync.js';
 import { mountBuilder } from './builder-shim.js';
+import { mountGrid } from './grid.js';
+import { renderOverview } from './overview.js';
 
 const { invoke } = window.__TAURI__.core;
 const { open: openDialog } = window.__TAURI__.dialog;
@@ -111,6 +113,7 @@ function enterProject(p) {
   startEngine(p.root);
 
   tabs = [
+    { id: 'db', label: '⊞ database', kind: 'view' },
     { id: 'schema', label: 'schema.sql', rel: 'schema.sql', content: p.schema, savedContent: p.schema, readonly: false },
     { id: 'data', label: 'data.sql', rel: 'data.sql', content: p.data, savedContent: p.data, readonly: false },
     { id: 'journal', label: 'journal.sql', rel: 'journal.sql', content: p.journal, savedContent: p.journal, readonly: true },
@@ -133,9 +136,14 @@ function renderTabs() {
   const bar = $('#file-tabs');
   bar.textContent = '';
   for (const t of tabs) {
-    const b = el('button', 'ftab' + (activeTab === t.id ? ' active' : ''));
+    const b = el('button', 'ftab' + (activeTab === t.id ? ' active' : '') + (t.kind === 'view' ? ' view-tab' : ''));
     b.appendChild(el('span', null, t.label));
-    if (t.content !== t.savedContent) b.appendChild(el('span', 'dirty', '●'));
+    if (t.kind !== 'view' && t.content !== t.savedContent) b.appendChild(el('span', 'dirty', '●'));
+    if (t.closable) {
+      const x = el('span', 'tab-x', '✕');
+      x.addEventListener('click', e => { e.stopPropagation(); closeTab(t.id); });
+      b.appendChild(x);
+    }
     b.addEventListener('click', () => activateTab(t.id));
     bar.appendChild(b);
   }
@@ -145,18 +153,94 @@ function renderTabs() {
   bar.appendChild(add);
 }
 
+function closeTab(id) {
+  const i = tabs.findIndex(t => t.id === id);
+  if (i < 0) return;
+  tabs.splice(i, 1);
+  if (activeTab === id) activateTab(tabs[Math.max(0, i - 1)].id);
+  else renderTabs();
+}
+
+const viewHost = () => {
+  let v = $('#view-host');
+  if (!v) {
+    v = el('div');
+    v.id = 'view-host';
+    $('#editor-host').appendChild(v);
+  }
+  return v;
+};
+
 function activateTab(id) {
   const t = tabById(id);
   if (!t) return;
   activeTab = id;
-  editor.value = t.content;
-  editor.readOnly = !!t.readonly;
+  if (t.kind === 'view') {
+    editor.style.display = 'none';
+    const v = viewHost();
+    v.style.display = '';
+    renderViewTab(t, v);
+  } else {
+    const v = $('#view-host');
+    if (v) v.style.display = 'none';
+    editor.style.display = '';
+    editor.value = t.content;
+    editor.readOnly = !!t.readonly;
+  }
   renderTabs();
+}
+
+/* schema model shared by the database view + grids (parsed from schema.sql) */
+function schemaModel() {
+  const t = tabById('schema');
+  try { return window.parseSchema(t ? t.content : ''); }
+  catch { return { tables: [], byName: {} }; }
+}
+
+async function tableCounts(model) {
+  const counts = {};
+  for (const t of model.tables) {
+    try {
+      const r = await invoke('db_exec', { sql: 'SELECT COUNT(*) FROM `' + t.name + '`', db: currentDb });
+      counts[t.name] = r.rows[0] ? r.rows[0][0] : '?';
+    } catch { counts[t.name] = '–'; }
+  }
+  return counts;
+}
+
+async function renderViewTab(t, host) {
+  if (t.id === 'db') {
+    const model = schemaModel();
+    const counts = engineRunning ? await tableCounts(model) : null;
+    renderOverview(host, model, counts, { openTable: openTableGrid });
+  } else if (t.id.startsWith('t:')) {
+    const name = t.id.slice(2);
+    const model = schemaModel();
+    const def = model.byName[name];
+    if (!def) { host.textContent = ''; host.appendChild(el('p', 'hint pad', 'table ' + name + ' is not in the schema anymore')); return; }
+    mountGrid(host, def, {
+      exec: async sql => {
+        try {
+          const res = await invoke('db_exec', { sql, db: currentDb });
+          return res;
+        } catch (e) { logStmt(sql); logErr(String(e)); return null; }
+      },
+      journal: (source, stmts) => journal(source, stmts)
+    });
+  }
+}
+
+function openTableGrid(name) {
+  const id = 't:' + name;
+  if (!tabById(id)) {
+    tabs.push({ id, label: '▦ ' + name, kind: 'view', closable: true });
+  }
+  activateTab(id);
 }
 
 editor.addEventListener('input', () => {
   const t = tabById(activeTab);
-  if (!t || t.readonly) return;
+  if (!t || t.readonly || t.kind === 'view') return;
   t.content = editor.value;
   renderTabs();
   // schema edits flow into the builder's understanding (debounced)
@@ -168,7 +252,7 @@ editor.addEventListener('input', () => {
 
 async function saveActive() {
   const t = tabById(activeTab);
-  if (!t || t.readonly) return;
+  if (!t || t.readonly || t.kind === 'view') return;
   try {
     await invoke('file_write', { rel: t.rel, content: t.content });
     t.savedContent = t.content;
