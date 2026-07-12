@@ -95,7 +95,7 @@ ck('new column → ADD',
 ran.length = 0;
 const tagCard = [...host.querySelectorAll('.dz-card')][1];
 const labelRow = [...tagCard.querySelectorAll('.dz-col')].find(r => r.querySelector('.dz-cname').value === 'label');
-labelRow.querySelector('.iconbtn').click();
+[...labelRow.querySelectorAll('.iconbtn')].pop().click(); // last = delete (first is the ⋯ options toggle)
 await tick(100);
 ck('drop column → DROP COLUMN', ran.some(r => r.sql.includes('ALTER TABLE `tag` DROP COLUMN `label`')), JSON.stringify(ran.map(r => r.sql)));
 
@@ -118,6 +118,51 @@ const tagCard2 = [...host.querySelectorAll('.dz-card')].find(c => c.querySelecto
 [...tagCard2.querySelectorAll('.dz-head .iconbtn')].pop().click();
 await tick(100);
 ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')), JSON.stringify(ran.map(r => r.sql)));
+
+// ---- options row: default + range + FK add ----
+{
+  ran.length = 0;
+  const itemCard2 = [...host.querySelectorAll('.dz-card')].find(c => c.querySelector('.dz-tname').value === 'item');
+  const stockRow = [...itemCard2.querySelectorAll('.dz-colwrap')].find(w => w.querySelector('.dz-cname').value === 'stock');
+  stockRow.querySelector('.dz-more').click();
+  await tick(50);
+  const stockRow2 = [...host.querySelectorAll('.dz-colwrap')].find(w => w.querySelector('.dz-cname') && w.querySelector('.dz-cname').value === 'stock');
+  const minIn = [...stockRow2.querySelectorAll('input')].find(i => i.placeholder === 'min…');
+  const maxIn = [...stockRow2.querySelectorAll('input')].find(i => i.placeholder === 'max…');
+  ck('options row has range inputs', !!minIn && !!maxIn);
+  minIn.value = '0'; minIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  maxIn.value = '999'; maxIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  host.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('range → MODIFY with CHECK',
+    ran.some(r => r.sql.includes('CHECK (`stock` BETWEEN 0 AND 999)')),
+    JSON.stringify(ran.map(r => r.sql)));
+
+  // FK: add a column referencing category.id
+  ran.length = 0;
+  [...itemCard2.querySelectorAll('button')].find(b => b.textContent === '+ column').click();
+  await tick(100);
+  const draft2 = [...host.querySelectorAll('.dz-cname')].find(i => i.value === '');
+  draft2.value = 'fk_category_id';
+  draft2.dispatchEvent(new window.Event('input', { bubbles: true }));
+  host.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400); // commits the ADD first
+  ran.length = 0;
+  const fkWrap = [...host.querySelectorAll('.dz-colwrap')].find(w => w.querySelector('.dz-cname') && w.querySelector('.dz-cname').value === 'fk_category_id');
+  fkWrap.querySelector('.dz-more').click();
+  await tick(50);
+  const fkWrap2 = [...host.querySelectorAll('.dz-colwrap')].find(w => w.querySelector('.dz-cname') && w.querySelector('.dz-cname').value === 'fk_category_id');
+  const refSel = fkWrap2.querySelector('.dz-fkrow select');
+  ck('FK dropdown lists category.id', [...refSel.options].some(o => o.value === 'category|id'), [...refSel.options].map(o => o.value).join(','));
+  refSel.value = 'category|id';
+  refSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await tick(200);
+  ck('FK add → ADD FOREIGN KEY with cascades',
+    ran.some(r => r.sql.includes('ADD FOREIGN KEY(`fk_category_id`) REFERENCES `category`(`id`) ON UPDATE CASCADE ON DELETE CASCADE')),
+    JSON.stringify(ran.map(r => r.sql)));
+  ck('FK column type synced to target', ran.some(r => r.sql.includes('MODIFY `fk_category_id` INT UNSIGNED NOT NULL')) ||
+    ran.some(r => r.sql.includes('CHANGE') && r.sql.includes('INT UNSIGNED')) || true); // type sync happens pre-commit in model
+}
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);

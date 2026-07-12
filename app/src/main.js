@@ -5,7 +5,7 @@
 import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry } from './sync.js';
 import { mountBuilder } from './builder-shim.js';
 import { mountGrid } from './grid.js';
-import { mountTablesDesigner } from './tables-designer.js';
+import { mountTablesDesigner, createTableDDL } from './tables-designer.js';
 
 const { invoke } = window.__TAURI__.core;
 const { open: openDialog } = window.__TAURI__.dialog;
@@ -294,8 +294,9 @@ async function writeSchemaFromModel(model) {
     : '';
   const blocks = [];
   for (const tbl of model) {
-    if (!tbl.origName) continue; // uncommitted drafts don't reach the file
-    blocks.push(tableDDLForFile(tbl));
+    // unnamed/empty drafts don't reach the file
+    if (!String(tbl.name || '').trim() || !tbl.cols.some(c => String(c.name || '').trim())) continue;
+    blocks.push(createTableDDL(tbl) + ';');
   }
   const text = '-- schema.sql — the database definition. Edited live by SQL Studio;\n-- you can also type here directly.\n\n' +
     header + '\n' + blocks.join('\n\n') + (blocks.length ? '\n' : '');
@@ -309,27 +310,6 @@ async function writeSchemaFromModel(model) {
   if (builder) builder.setSchema(text);
 }
 
-function tableDDLForFile(t) {
-  const colLine = c => {
-    let s = ' ' + c.name + ' ' + c.type + (String(c.args || '').trim() ? '(' + String(c.args).trim() + ')' : '');
-    if (c.uns) s += ' UNSIGNED';
-    if (c.nn) s += ' NOT NULL';
-    if (c.ai) s += ' AUTO_INCREMENT';
-    if (String(c.def || '').trim()) {
-      const d = String(c.def).trim();
-      s += ' DEFAULT ' + (/^(-?\d+(\.\d+)?|NOW\(\)|CURRENT_TIMESTAMP|CURDATE\(\)|CURTIME\(\)|TRUE|FALSE|NULL)$/i.test(d)
-        ? d.toUpperCase() : "'" + d.replace(/'/g, "''") + "'");
-    }
-    return s;
-  };
-  const lines = t.cols.map(colLine);
-  const pks = t.cols.filter(c => c.pk).map(c => c.name);
-  if (pks.length) lines.push(' PRIMARY KEY(' + pks.join(', ') + ')');
-  for (const fk of t.fks || []) {
-    lines.push(' FOREIGN KEY(' + fk.col + ') REFERENCES ' + fk.refTable + '(' + fk.refCol + ')');
-  }
-  return 'CREATE TABLE ' + t.origName + ' (\n' + lines.join(',\n') + '\n);';
-}
 
 let designer = null;
 

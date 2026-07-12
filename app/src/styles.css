@@ -372,6 +372,38 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 .dz-col .flag:hover { border-color: var(--ink); color: var(--ink); }
 .dz-col .flag.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .dz-card .btn.small { margin-top: 10px; }
+.dz-colwrap { border-bottom: 1px solid var(--line); }
+.dz-colwrap .dz-col { border-bottom: 0; }
+.dz-more { font-weight: 400 !important; }
+.dz-opts {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 2px 0 7px 8px;
+}
+.dz-def {
+  width: 104px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: var(--mono); font-size: .72rem; padding: 3px 7px; outline: none;
+}
+.dz-range {
+  width: 58px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: var(--mono); font-size: .72rem; padding: 3px 7px; outline: none;
+}
+.dz-def:focus, .dz-range:focus { border-color: var(--accent); }
+.dz-fkrow {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 0 0 8px 8px;
+}
+.dz-fklabel {
+  font-size: .6rem; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+.dz-fkinfo { font-family: var(--mono); font-size: .7rem; color: var(--muted); }
+.dz-fkrow select {
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: inherit; font-size: .7rem; padding: 3px 4px; outline: none;
+}
+.dz-fkrow select:focus { border-color: var(--accent); }
 
 /* ---- data grid ---- */
 .grid-head {
