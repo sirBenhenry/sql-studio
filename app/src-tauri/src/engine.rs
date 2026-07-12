@@ -248,6 +248,63 @@ pub fn db_status(state: tauri::State<EngineState>) -> Result<EngineInfo, String>
 mod tests {
     use super::*;
 
+    /// Project-lifecycle integration: scaffold a project folder, start the
+    /// engine on it (as db_start does), build the DB from a schema.sql-like
+    /// script, restart the engine, and confirm the data SURVIVED in the
+    /// project's own datadir (folder = database).
+    #[test]
+    fn project_datadir_persists_across_restarts() {
+        let engine = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("engine");
+        if !engine.join("bin").join("mysqld.exe").exists() {
+            panic!("engine missing — run: node scripts/fetch-engine.mjs");
+        }
+        let proj = std::env::temp_dir().join("sqlstudio-proj-test");
+        let _ = std::fs::remove_dir_all(&proj);
+        let datadir = proj.join(".sqlstudio").join("db");
+        initialize_datadir(&engine, &datadir).expect("initialize");
+
+        // session 1: create schema + data
+        {
+            let port = free_port().unwrap();
+            let mut cmd = Command::new(engine.join("bin").join("mysqld.exe"));
+            cmd.args(mysqld_args(&engine, &datadir, port));
+            no_window(&mut cmd);
+            let child = cmd.spawn().unwrap();
+            let pool = wait_ready(port, Duration::from_secs(60)).unwrap();
+            let mut conn = pool.get_conn().unwrap();
+            conn.query_drop("CREATE DATABASE shop").unwrap();
+            conn.query_drop("USE shop").unwrap();
+            conn.query_drop("CREATE TABLE item (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(50))")
+                .unwrap();
+            conn.query_drop("INSERT INTO item (name) VALUES ('lamp'),('chair')")
+                .unwrap();
+            drop(conn);
+            let mut e = Engine { child: Some(child), port, pool: Some(pool) };
+            e.shutdown();
+        }
+
+        // session 2: same datadir, new port — data must still be there
+        {
+            let port = free_port().unwrap();
+            let mut cmd = Command::new(engine.join("bin").join("mysqld.exe"));
+            cmd.args(mysqld_args(&engine, &datadir, port));
+            no_window(&mut cmd);
+            let child = cmd.spawn().unwrap();
+            let pool = wait_ready(port, Duration::from_secs(60)).unwrap();
+            let mut conn = pool.get_conn().unwrap();
+            let names: Vec<String> = conn
+                .query("SELECT name FROM shop.item ORDER BY id")
+                .unwrap();
+            assert_eq!(names, vec!["lamp".to_string(), "chair".to_string()]);
+            drop(conn);
+            let mut e = Engine { child: Some(child), port, pool: Some(pool) };
+            e.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
     /// Full sandbox round-trip against the bundled engine:
     /// initialize → start → DDL/DML → query → clean shutdown.
     #[test]
