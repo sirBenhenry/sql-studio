@@ -22,11 +22,69 @@ Escape cancels, no-change no-op), #18 (console ↑/↓ history), #22 (new cards
 placed below saved ones; stale positions pruned on save), #23 (askDbName
 listener leak), #24 (splitter text-selection).
 
-**STILL OPEN:** #10 (typing in schema.sql → DB diff — the missing P4 half),
-#12 (unsaved-changes guard on close), #13 (currentDb fragility), #14 (dead
-code cleanup), #15 (import-a-dump), #17 (grid: empty-string vs NULL,
-pagination, sort/filter, console echo), #19 (builder Apply success feedback),
-#20/#21 (human error hints — P8), #25–#28 (perf/robustness niceties).
+## SECOND ROUND — interactive debugging with Ben (same day, commits cc5acab…f249515)
+
+Everything below came out of Ben's live film-club test run (test_project_2):
+
+- **Properties popup redesign** (Ben's spec): per-row "properties" button →
+  popup with everything (flags written out, DEFAULT + ⏱now, range, FK
+  target/rules/remove); closes on ✕ or outside-click, closing applies;
+  toggles don't commit mid-popup; a commit can never slam it shut
+  (regression-tested). Row shows written-out filled tags; **clicking a tag
+  removes that property** (FK tag opens the popup).
+- **The schema-eating bug** (worst of the round): the parser's DEFAULT regex
+  truncated nested parens — `(CURDATE())` captured as `(CURDATE()` —
+  regeneration wrote the unbalanced paren and the whole `member` table became
+  unparseable/invisible while the DB kept it. Fixed with balanced
+  `readBalanced` capture; decimal defaults (`3.50`→`3`) fixed too. THREE
+  safety nets added: `defaultLit` refuses unbalanced parens; ANY schema.sql
+  regeneration parses its own output back and refuses to write if a table
+  would be lost (falls back to `syncSchemaFromDb`); no-op RENAME spam from
+  trailing spaces in names fixed (compare cleaned names).
+- **MySQL DEFAULT grammar** (error 1064): only CURRENT_TIMESTAMP may stand
+  bare; ⏱now emits `DEFAULT (CURDATE())`/`(CURTIME())` — validated against
+  the real engine in the cargo lifecycle test.
+- **Designer session undo** (#new): every committed state snapshotted with
+  `_uid` lineage (max 100); Ctrl+Z outside text fields / ↶ button replays
+  through the normal commit pipeline. Session-scoped (tab remount resets).
+- **FK-by-name live autocomplete** in the builder (shim-injected: typed
+  prefixes suggest real values from the live DB) + **semi-live INSERT**
+  ("+ add row" applies the built row first — so row 2 can reference row 1;
+  Apply clears applied rows → double-Apply duplicates are gone, closing #19's
+  worst half). Shim refactored: `wireBuilder(d, win, hooks)` exported and
+  covered directly by test-shim.
+- **Toast leak** fixed (lite tool's "Database loaded" popped over the pane on
+  every schema re-feed) → hidden, replaced by a small `#builder-sync` flash.
+- Canvas: wheel pans, ctrl+wheel zooms (cursor-anchored, persisted); designer
+  gets a 260px bottom scroll buffer; args fields normalize tolerantly
+  (`3.4`→`DECIMAL(3,4)`) with a red live warning; existing FK cascade rules
+  editable (drop+re-add).
+
+**STILL OPEN (the queue for future sessions):**
+- **#10 — typing in schema.sql → DB diff.** The missing P4 half and the
+  biggest remaining feature: editing the file only feeds the builder model;
+  the DB is untouched until a fresh-sandbox rebuild. Needs a diff-apply
+  pipeline (parse file → diff against DB truth → confirm → apply), probably
+  on Ctrl+S with a confirmation.
+- **#12 — unsaved-changes guard on close** (dirty tabs die silently; Tauri
+  `onCloseRequested` is the hook).
+- **#13 — currentDb fragility** (header naming a nonexistent DB → everything
+  fails with no recovery hint; console `USE nodb` unvalidated).
+- **#14 — dead code**: `appendSchema` in main.js has no caller; `overview.js`
+  superseded by designer/canvas; localStorage key `sqlstudio.lang` written
+  but never read.
+- **#15 — import-a-dump** as a Settings feature (Ben requested explicitly).
+- **#17 — grid leftovers**: no way to store an empty string (''→NULL), no
+  pagination past rowLimit, no sort/filter, grid statements don't echo in
+  the console.
+- **#19 (rest) — builder Apply success feedback** in the pane itself.
+- **#20/#21 — human error hints** (errno 1075/3730/1832… → plain-language
+  explanation + suggested fix) — P8 material along with onboarding tour,
+  icons, NSIS installer.
+- **#25–#28 — perf/robustness**: per-statement IPC for big scripts, db_exec
+  holds the engine mutex, journal tab whole-text re-render, `csp: null`.
+- **Undo across tab switches** (history is session-scoped today) and a redo.
+- P9 — external server deploy (connection manager, journal replay/dump).
 
 ---
 
