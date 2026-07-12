@@ -325,6 +325,54 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 }
 .keytag.fk { color: var(--muted); }
 
+/* ---- tables designer (the live ⊞ database view) ---- */
+.dz-wrap { padding: 14px 16px; }
+.dz-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.dz-hint { color: var(--muted); font-size: .8rem; }
+.dz-grid {
+  display: grid; gap: 18px 22px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+.dz-card { border: 1px solid var(--line); border-top: 2px solid var(--rule); padding: 10px 14px 12px; }
+.dz-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.dz-tname {
+  flex: 1; min-width: 0;
+  border: 0; border-bottom: 2px solid var(--rule);
+  background: none; color: var(--ink);
+  font-family: inherit; font-weight: 800; font-size: .9rem;
+  text-transform: uppercase; letter-spacing: .06em;
+  padding: 2px 0; outline: none;
+}
+.dz-tname:focus { border-bottom-color: var(--accent); }
+.dz-col {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 5px 0; border-bottom: 1px solid var(--line);
+}
+.dz-cname {
+  flex: 1 1 110px; min-width: 80px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: var(--mono); font-size: .78rem; padding: 4px 8px; outline: none;
+}
+.dz-cname:focus { border-color: var(--accent); }
+.dz-col select {
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: inherit; font-size: .72rem; padding: 3px 4px; outline: none;
+}
+.dz-args {
+  width: 56px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: var(--mono); font-size: .74rem; padding: 4px 6px; outline: none;
+}
+.dz-args:focus, .dz-col select:focus { border-color: var(--accent); }
+.dz-col .flag {
+  border: 1px solid var(--line); background: none; color: var(--muted);
+  font-family: inherit; font-size: .58rem; font-weight: 700; letter-spacing: .05em;
+  padding: 3px 6px; cursor: pointer; text-transform: uppercase;
+}
+.dz-col .flag:hover { border-color: var(--ink); color: var(--ink); }
+.dz-col .flag.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.dz-card .btn.small { margin-top: 10px; }
+
 /* ---- data grid ---- */
 .grid-head {
   display: flex; align-items: center; gap: 12px;

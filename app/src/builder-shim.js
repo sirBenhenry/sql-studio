@@ -18,9 +18,10 @@ const HIDE_CSS = `
      no practice lists, no long explainer hints */
   .sql-card, .practice { display: none !important; }
   .card > .hint, #builder-section > .hint { display: none !important; }
-  /* the project IS the database — no start-from-scratch toggle; the IDE
-     names the database itself and CREATE always extends it */
-  .boiler-row, #extend-note { display: none !important; }
+  /* the project IS the database — no start-from-scratch toggle; and the
+     CREATE/ALTER modes live in the IDE's Tables designer (⊞ database tab),
+     so the builder keeps only the data modes */
+  .boiler-row, #extend-note, #tab-create, #tab-alter { display: none !important; }
 
   main { padding: 0 12px 64px; max-width: none; }
   .card { padding-top: 14px; padding-bottom: 16px; margin-top: 10px; }
@@ -190,32 +191,7 @@ export function mountBuilder(host, hooks) {
         sqlSel: '#delete-sql',
         run: sql => hooks.runScript(sql, 'builder: delete', { journal: true })
       },
-      create: {
-        label: '✓ Apply',
-        title: 'create these tables in the project database and schema.sql',
-        sqlSel: '#create-sql',
-        run: async sql => {
-          const ok = await hooks.runScript(sql, 'builder: create', { journal: true });
-          if (!ok) return false;
-          // the IDE appends to schema.sql itself (the lite tool's own merge
-          // REPLACES its text when it has no parsed tables — data loss)
-          hooks.appendSchema(sql);
-          return true;
-        }
-      },
-      alter: {
-        label: '✓ Apply',
-        title: 'run the changes, journal them, and update schema.sql',
-        sqlSel: '#alter-sql',
-        run: async sql => {
-          const ok = await hooks.runScript(sql, 'builder: alter', { journal: true });
-          if (!ok) return false;
-          // schema.sql accumulates the ALTERs; the parser applies them in
-          // document order, so the model (and the builder) stay correct
-          hooks.appendSchema(sql);
-          return true;
-        }
-      }
+      // CREATE and ALTER live in the IDE's Tables designer (⊞ database tab)
     };
 
     const currentMode = () => {
