@@ -1,8 +1,11 @@
 // builder-shim.js — mounts the lite tool (core/builder.html, extracted
 // verbatim) as a same-origin iframe inside the builder pane and adapts it
-// from the OUTSIDE: hides its standalone chrome, feeds it the project
-// schema, and adds Run/Apply buttons that route into the IDE's sync
-// pipeline. The lite tool's code is never modified — zero drift.
+// from the OUTSIDE into an integrated IDE panel: the website chrome, SQL
+// copy-posters, hints and practice sections are hidden — the builder is
+// just the building controls plus ONE contextual action bar at the bottom
+// (▶ Run in SELECT, ✓ Apply in the write modes). Changes flow straight
+// into the project (files + database + journal); nothing is copied.
+// The lite tool's code is never modified — zero drift.
 'use strict';
 
 import { splitSQL } from './sync.js';
@@ -10,7 +13,16 @@ import { splitSQL } from './sync.js';
 const HIDE_CSS = `
   .hero, footer, #tour, #tour-ring, #tour-backdrop, #tour-box,
   #schema-section, #lang-toggle, #tour-replay { display: none !important; }
-  main { padding: 0 14px 40px; max-width: none; }
+
+  /* the IDE owns SQL display (files + console): no posters, no copy,
+     no practice lists, no long explainer hints */
+  .sql-card, .practice { display: none !important; }
+  .card > .hint, #builder-section > .hint { display: none !important; }
+
+  main { padding: 0 12px 64px; max-width: none; }
+  .card { padding-top: 14px; padding-bottom: 16px; margin-top: 10px; }
+  .step-head .step-badge { display: none !important; }   /* no step numbers in the IDE */
+
   /* mode tabs: ONE compact row that always fits the narrow pane */
   .mode-tabs {
     margin-top: 8px;
@@ -27,17 +39,51 @@ const HIDE_CSS = `
     white-space: nowrap;
     flex: 0 1 auto !important;
   }
-  .mode-tab span { display: none !important; }   /* hide "— query data" descriptions */
-  /* stack builder over SQL — the pane is a narrow column */
+  .mode-tab span { display: none !important; }
+
   .workbench { grid-template-columns: 1fr !important; gap: 0 !important; }
-  .sql-card { position: static !important; }
+
   /* no sideways scrolling inside the pane; slim scrollbars */
   html, body { overflow-x: hidden !important; }
-  .sql-box { white-space: pre-wrap !important; overflow-x: hidden !important; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgba(127,127,127,.35); border-radius: 4px; }
   ::-webkit-scrollbar-corner { background: transparent; }
+
+  /* the IDE action bar (shim-owned) */
+  #ide-actionbar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    background: var(--bg);
+    border-top: 2px solid var(--rule);
+    z-index: 50;
+  }
+  #ide-actionbar .sqlpeek {
+    flex: 1; min-width: 0;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: .68rem; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+`;
+
+/* forced-theme overrides for the lite tool (it only knows the OS media
+   query) — same palettes, attribute-driven so Settings can force a side */
+const THEME_CSS = `
+  :root[data-theme="light"] {
+    --bg:#ffffff; --ink:#111111; --muted:#737373; --line:#e2e2e2;
+    --rule:#111111; --accent:#e8342c;
+    --cat-table:#c2410c; --cat-col:#1d4ed8; --cat-agg:#0e7490; --cat-cond:#15803d;
+    --cat-group:#be185d; --cat-sort:#6d28d9; --cat-limit:#737373;
+    --sql-bg:#0d0d0d; --sql-line:#0d0d0d;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0e0e0e; --ink:#f2f2f2; --muted:#8f8f8f; --line:#272727;
+    --rule:#f2f2f2; --accent:#ff5347;
+    --cat-table:#fb923c; --cat-col:#60a5fa; --cat-agg:#22d3ee; --cat-cond:#4ade80;
+    --cat-group:#f472b6; --cat-sort:#a78bfa; --cat-limit:#9ca3af;
+    --sql-bg:#000000; --sql-line:#2a2a2a;
+  }
 `;
 
 /* the lite tool's empty-state notes talk about its own step-1 upload panel,
@@ -79,6 +125,13 @@ export function mountBuilder(host, hooks) {
     },
     readSchemaText() {
       return api.ready ? frame.contentDocument.querySelector('#schema-input').value : '';
+    },
+    setTheme(mode) {
+      api._theme = mode;
+      if (!api.ready) return;
+      const root = frame.contentDocument.documentElement;
+      if (mode === 'system') root.removeAttribute('data-theme');
+      else root.setAttribute('data-theme', mode);
     }
   };
 
@@ -86,93 +139,120 @@ export function mountBuilder(host, hooks) {
     const d = frame.contentDocument;
 
     const style = d.createElement('style');
-    style.textContent = HIDE_CSS;
+    style.textContent = HIDE_CSS + THEME_CSS;
     d.head.appendChild(style);
+    if (api._theme && api._theme !== 'system') {
+      d.documentElement.setAttribute('data-theme', api._theme);
+    }
 
     // reword the lite tool's "load a database in step 1" empty-state notes
     for (const n of d.querySelectorAll('.lock-note')) n.textContent = LOCK_NOTE;
 
-    const btn = (label, title) => {
-      const b = d.createElement('button');
-      b.className = 'btn small primary';
-      b.textContent = label;
-      if (title) b.title = title;
-      return b;
-    };
     const panelText = sel => (d.querySelector(sel) ? d.querySelector(sel).textContent : '');
+    const liteApplyAlter = d.querySelector('#btn-apply-alter');
+    const liteToSelect = d.querySelector('#btn-to-select');
 
-    // ---- SELECT: Run → console ----
-    {
-      const head = d.querySelector('#sql-section .step-head');
-      if (head) {
-        const run = btn('▶ Run', 'execute this query against the project database');
-        run.addEventListener('click', () => hooks.runScript(panelText('#sql-output'), 'builder: select', { journal: false }));
-        head.appendChild(run);
-      }
-    }
-
-    // ---- INSERT: Apply → execute + journal + data.sql ----
-    {
-      const head = d.querySelector('#insert-section .sql-card .step-head');
-      if (head) {
-        const b = btn('✓ Apply', 'execute and record in data.sql');
-        b.addEventListener('click', async () => {
-          const sql = panelText('#insert-sql');
+    /* ---- the mode-contextual actions (executed through the IDE hooks) ---- */
+    const ACTIONS = {
+      select: {
+        label: '▶ Run',
+        title: 'execute this query against the project database',
+        sqlSel: '#sql-output',
+        run: sql => hooks.runScript(sql, 'builder: select', { journal: false })
+      },
+      insert: {
+        label: '✓ Apply',
+        title: 'execute and record in data.sql',
+        sqlSel: '#insert-sql',
+        run: async sql => {
           const ok = await hooks.runScript(sql, 'builder: insert', { journal: true });
           if (ok) hooks.appendData(sql);
-        });
-        head.appendChild(b);
-      }
-    }
-
-    // ---- UPDATE / DELETE: Apply → execute + journal ----
-    for (const [sec, label] of [['update', 'builder: update'], ['delete', 'builder: delete']]) {
-      const head = d.querySelector('#' + sec + '-section .sql-card .step-head');
-      if (head) {
-        const b = btn('✓ Apply', 'execute against the project database');
-        b.addEventListener('click', () => hooks.runScript(panelText('#' + sec + '-sql'), label, { journal: true }));
-        head.appendChild(b);
-      }
-    }
-
-    // ---- ALTER: Apply → execute + journal + fold into schema.sql ----
-    {
-      const head = d.querySelector('#alter-section .sql-card .step-head');
-      const liteApply = d.querySelector('#btn-apply-alter');
-      if (head && liteApply) {
-        // the lite tool's own apply button would only edit its local textarea —
-        // replace it with the IDE flow (execute → journal → schema.sql)
-        liteApply.style.display = 'none';
-        const b = btn('✓ Apply', 'run the ALTERs, journal them, and update schema.sql');
-        b.addEventListener('click', async () => {
-          const sql = panelText('#alter-sql');
-          if (!splitSQL(sql).length) { return; }
-          const ok = await hooks.runScript(sql, 'builder: alter', { journal: true });
-          if (!ok) return;
-          liteApply.click(); // lite folds the change into its schema text + model
-          hooks.schemaChanged(api.readSchemaText());
-        });
-        head.appendChild(b);
-      }
-    }
-
-    // ---- CREATE: Apply → execute + journal + schema.sql ----
-    {
-      const head = d.querySelector('#create-section .sql-card .step-head');
-      const toSelect = d.querySelector('#btn-to-select');
-      if (head && toSelect) {
-        const b = btn('✓ Apply', 'create these tables in the project database and schema.sql');
-        b.addEventListener('click', async () => {
-          const sql = panelText('#create-sql');
-          if (!splitSQL(sql).length) return;
+          return ok;
+        }
+      },
+      update: {
+        label: '✓ Apply',
+        title: 'execute against the project database',
+        sqlSel: '#update-sql',
+        run: sql => hooks.runScript(sql, 'builder: update', { journal: true })
+      },
+      delete: {
+        label: '✓ Apply',
+        title: 'execute against the project database',
+        sqlSel: '#delete-sql',
+        run: sql => hooks.runScript(sql, 'builder: delete', { journal: true })
+      },
+      create: {
+        label: '✓ Apply',
+        title: 'create these tables in the project database and schema.sql',
+        sqlSel: '#create-sql',
+        run: async sql => {
           const ok = await hooks.runScript(sql, 'builder: create', { journal: true });
-          if (!ok) return;
-          toSelect.click(); // lite merges the new tables into its schema text
+          if (!ok) return false;
+          if (liteToSelect) liteToSelect.click(); // lite merges new tables into its schema text
           hooks.schemaChanged(api.readSchemaText());
-        });
-        head.appendChild(b);
+          return true;
+        }
+      },
+      alter: {
+        label: '✓ Apply',
+        title: 'run the changes, journal them, and update schema.sql',
+        sqlSel: '#alter-sql',
+        run: async sql => {
+          const ok = await hooks.runScript(sql, 'builder: alter', { journal: true });
+          if (!ok) return false;
+          if (liteApplyAlter) liteApplyAlter.click(); // lite folds the change into its schema text + model
+          hooks.schemaChanged(api.readSchemaText());
+          return true;
+        }
       }
+    };
+
+    const currentMode = () => {
+      const t = d.querySelector('.mode-tab.active');
+      const m = t ? t.id.replace('tab-', '') : 'select';
+      return ACTIONS[m] ? m : 'select';
+    };
+
+    /* generated SQL, comment lines stripped (placeholders/warnings) */
+    const currentSQL = () => {
+      const a = ACTIONS[currentMode()];
+      return panelText(a.sqlSel).split('\n').filter(l => !l.trim().startsWith('--')).join('\n').trim();
+    };
+
+    /* ---- the single action bar ---- */
+    const bar = d.createElement('div');
+    bar.id = 'ide-actionbar';
+    const peek = d.createElement('span');
+    peek.className = 'sqlpeek';
+    const actBtn = d.createElement('button');
+    actBtn.className = 'btn primary small';
+    bar.appendChild(peek);
+    bar.appendChild(actBtn);
+    d.body.appendChild(bar);
+
+    function refreshBar() {
+      const a = ACTIONS[currentMode()];
+      actBtn.textContent = a.label;
+      actBtn.title = a.title;
+      const sql = currentSQL();
+      peek.textContent = sql.replace(/\s+/g, ' ');
+      actBtn.disabled = !splitSQL(sql).length;
     }
+
+    actBtn.addEventListener('click', async () => {
+      const a = ACTIONS[currentMode()];
+      const sql = currentSQL();
+      if (!splitSQL(sql).length) return;
+      actBtn.disabled = true;
+      try { await a.run(sql); } finally { refreshBar(); }
+    });
+
+    // keep the bar current: mode switches + any change inside the builder
+    d.addEventListener('click', () => setTimeout(refreshBar, 0));
+    d.addEventListener('input', () => setTimeout(refreshBar, 0));
+    d.addEventListener('change', () => setTimeout(refreshBar, 0));
+    refreshBar();
 
     api.ready = true;
     if (api._pending != null) {

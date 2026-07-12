@@ -54,6 +54,22 @@
   }
 }
 
+/* ---- forced theme (Settings) — attribute selectors outrank the media query ---- */
+:root[data-theme="light"] {
+  --bg: #ffffff; --ink: #111111; --muted: #737373; --line: #e2e2e2;
+  --rule: #111111; --accent: #e8342c;
+  --cat-table: #c2410c; --cat-col: #1d4ed8; --cat-agg: #0e7490; --cat-cond: #15803d;
+  --cat-group: #be185d; --cat-sort: #6d28d9; --cat-limit: #737373;
+  --sql-bg: #0d0d0d; --sql-line: #0d0d0d;
+}
+:root[data-theme="dark"] {
+  --bg: #0e0e0e; --ink: #f2f2f2; --muted: #8f8f8f; --line: #272727;
+  --rule: #f2f2f2; --accent: #ff5347;
+  --cat-table: #fb923c; --cat-col: #60a5fa; --cat-agg: #22d3ee; --cat-cond: #4ade80;
+  --cat-group: #f472b6; --cat-sort: #a78bfa; --cat-limit: #9ca3af;
+  --sql-bg: #000000; --sql-line: #2a2a2a;
+}
+
 * { box-sizing: border-box; }
 
 /* the hidden attribute must always win — #workspace has display:grid which
@@ -322,6 +338,50 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
   border-top: 1px solid var(--line);
   font-family: var(--mono); font-size: .68rem; color: var(--muted);
 }
+
+/* ================= settings modal ================= */
+#settings-backdrop {
+  position: fixed; inset: 0; z-index: 90;
+  background: color-mix(in srgb, var(--ink) 45%, transparent);
+}
+#settings-modal {
+  position: fixed; z-index: 91;
+  top: 70px; right: 16px;
+  width: min(360px, calc(100vw - 32px));
+  background: var(--bg); color: var(--ink);
+  border: 2px solid var(--ink);
+  box-shadow: 0 14px 40px rgba(0,0,0,.4);
+  padding: 18px 20px 16px;
+}
+#settings-modal h3 {
+  margin: 0 0 14px; font-size: .8rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .1em;
+}
+.set-row2 { margin-bottom: 14px; }
+.set-label {
+  display: block; font-size: .64rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); margin-bottom: 5px;
+}
+.seg { display: inline-flex; border: 1px solid var(--line); }
+.seg button {
+  background: none; border: 0; cursor: pointer; font-family: inherit;
+  font-size: .68rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); padding: 5px 12px;
+}
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button:hover { color: var(--ink); }
+.seg button.active { background: var(--ink); color: var(--bg); }
+.set-num {
+  width: 90px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: var(--mono); font-size: .8rem; padding: 5px 8px;
+}
+#btn-settings {
+  background: none; border: 1px solid var(--line); color: var(--muted);
+  cursor: pointer; font-size: .8rem; font-weight: 700;
+  width: 26px; height: 26px; border-radius: 50%; padding: 0;
+}
+#btn-settings:hover { color: var(--accent); border-color: var(--accent); }
 
 /* ================= toast ================= */
 #toast {

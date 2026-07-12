@@ -17,8 +17,41 @@
         <button class="lang-opt" data-lang="natural">Natural</button>
         <button class="lang-opt" data-lang="plain">SQL</button>
       </div>
+      <button id="btn-settings" title="Settings">⚙</button>
     </div>
   </header>
+
+  <!-- ======= settings ======= -->
+  <div id="settings-backdrop" hidden></div>
+  <div id="settings-modal" hidden>
+    <h3>Settings</h3>
+    <div class="set-row2">
+      <span class="set-label">theme</span>
+      <div class="seg" id="set-theme">
+        <button data-v="system">System</button>
+        <button data-v="light">Light</button>
+        <button data-v="dark">Dark</button>
+      </div>
+    </div>
+    <div class="set-row2">
+      <span class="set-label">builder wording</span>
+      <div class="seg" id="set-lang">
+        <button data-v="natural">Natural</button>
+        <button data-v="plain">SQL</button>
+      </div>
+    </div>
+    <div class="set-row2">
+      <span class="set-label">max rows shown per result</span>
+      <input id="set-rowlimit" class="set-num" type="number" min="10" max="10000" step="10" />
+    </div>
+    <div class="set-row2">
+      <span class="set-label">confirm before deleting rows</span>
+      <div class="seg" id="set-confirm">
+        <button data-v="on">On</button>
+        <button data-v="off">Off</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ======= welcome (no project) ======= -->
   <section id="welcome">

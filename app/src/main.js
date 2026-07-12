@@ -32,9 +32,74 @@ let project = null;      // {root, name, schema, data, journal, queries:[{name,c
 let tabs = [];           // {id, label, rel, content, savedContent, readonly}
 let activeTab = null;
 
+/* ================= settings ================= */
+
+const DEFAULT_SETTINGS = { theme: 'system', lang: 'natural', rowLimit: 500, confirmDelete: true };
+
+function loadSettings() {
+  try { return { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem('sqlstudio.settings')) || {}) }; }
+  catch { return { ...DEFAULT_SETTINGS }; }
+}
+let SETTINGS = loadSettings();
+
+function saveSettings() {
+  localStorage.setItem('sqlstudio.settings', JSON.stringify(SETTINGS));
+}
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (SETTINGS.theme === 'system') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', SETTINGS.theme);
+  if (builder && builder.setTheme) builder.setTheme(SETTINGS.theme);
+}
+
+function wireSettingsUI() {
+  const modal = $('#settings-modal');
+  const backdrop = $('#settings-backdrop');
+  const openClose = show => { modal.hidden = !show; backdrop.hidden = !show; };
+  $('#btn-settings').addEventListener('click', () => { syncSettingsUI(); openClose(modal.hidden); });
+  backdrop.addEventListener('click', () => openClose(false));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') openClose(false); });
+
+  const seg = (sel, get, set) => {
+    const box = $(sel);
+    box.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      set(b.dataset.v);
+      saveSettings();
+      syncSettingsUI();
+    });
+    box._sync = () => {
+      for (const b of box.querySelectorAll('button')) b.classList.toggle('active', b.dataset.v === get());
+    };
+  };
+  seg('#set-theme', () => SETTINGS.theme, v => { SETTINGS.theme = v; applyTheme(); });
+  seg('#set-lang', () => SETTINGS.lang, v => {
+    SETTINGS.lang = v;
+    if (LANG !== v) { LANG = v; localStorage.setItem('sqlstudio.lang', v); applyLang(); if (builder) builder.setLang(v); }
+  });
+  seg('#set-confirm', () => (SETTINGS.confirmDelete ? 'on' : 'off'), v => { SETTINGS.confirmDelete = v === 'on'; });
+
+  $('#set-rowlimit').addEventListener('change', e => {
+    const n = parseInt(e.target.value, 10);
+    SETTINGS.rowLimit = Number.isFinite(n) ? Math.min(Math.max(n, 10), 10000) : DEFAULT_SETTINGS.rowLimit;
+    saveSettings();
+    syncSettingsUI();
+  });
+}
+
+function syncSettingsUI() {
+  for (const sel of ['#set-theme', '#set-lang', '#set-confirm']) {
+    const box = $(sel);
+    if (box && box._sync) box._sync();
+  }
+  $('#set-rowlimit').value = SETTINGS.rowLimit;
+}
+
 /* ================= language toggle (persisted) ================= */
 
-let LANG = localStorage.getItem('sqlstudio.lang') === 'plain' ? 'plain' : 'natural';
+let LANG = SETTINGS.lang === 'plain' ? 'plain' : 'natural';
 function applyLang() {
   document.querySelectorAll('#lang-toggle .lang-opt').forEach(b =>
     b.classList.toggle('active', b.dataset.lang === LANG));
@@ -43,7 +108,8 @@ $('#lang-toggle').addEventListener('click', e => {
   const opt = e.target.closest('.lang-opt');
   if (!opt || opt.dataset.lang === LANG) return;
   LANG = opt.dataset.lang;
-  localStorage.setItem('sqlstudio.lang', LANG);
+  SETTINGS.lang = LANG;
+  saveSettings();
   applyLang();
   if (builder) builder.setLang(LANG);
 });
@@ -225,7 +291,8 @@ async function renderViewTab(t, host) {
           return res;
         } catch (e) { logStmt(sql); logErr(String(e)); return null; }
       },
-      journal: (source, stmts) => journal(source, stmts)
+      journal: (source, stmts) => journal(source, stmts),
+      shouldConfirm: () => SETTINGS.confirmDelete
     });
   }
 }
@@ -427,7 +494,7 @@ function logResult(res) {
     thead.appendChild(hr);
     table.appendChild(thead);
     const tbody = el('tbody');
-    const MAX = 500;
+    const MAX = SETTINGS.rowLimit;
     for (const row of res.rows.slice(0, MAX)) {
       const tr = el('tr');
       for (const cell of row) {
@@ -494,6 +561,7 @@ builder = mountBuilder($('#builder-host'), {
   schemaChanged,
   onReady() {
     builder.setLang(LANG);
+    builder.setTheme(SETTINGS.theme);
     if (project) builder.setSchema(tabById('schema') ? tabById('schema').content : '');
   }
 });
@@ -525,3 +593,5 @@ wireSplitter('#splitter-h', '--console-h', true);
 $('#btn-new-project').addEventListener('click', newProject);
 $('#btn-open-project').addEventListener('click', openProject);
 renderRecents();
+wireSettingsUI();
+applyTheme();
