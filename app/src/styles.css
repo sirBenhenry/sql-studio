@@ -435,13 +435,16 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 .dz-colwrap .dz-col { border-bottom: 0; }
 .dz-more { font-weight: 400 !important; white-space: nowrap; }
 
-/* written-out property tags on the column row — filled, so set = selected */
+/* written-out property tags on the column row — filled, so set = selected;
+   clicking one removes that property (hover warns in accent) */
 .dz-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
 .dz-tag {
-  font-size: .58rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  font-family: inherit; font-size: .58rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
   background: var(--ink); color: var(--bg); border: 1px solid var(--ink);
-  padding: 2px 5px; white-space: nowrap;
+  padding: 2px 5px; white-space: nowrap; cursor: pointer;
 }
+.dz-tag:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dz-tags button.keytag { font-family: inherit; cursor: pointer; }
 
 /* the properties popup (click ✕ or anywhere outside to close & apply) */
 .dz-popback { position: fixed; inset: 0; z-index: 60; background: transparent; }

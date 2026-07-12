@@ -34,9 +34,29 @@ function displayLit(v) {
   return m ? m[1].replace(/''/g, "'") : v;
 }
 
+/* stable identities so the undo history can follow tables/columns through
+   renames — fresh per mount, carried through every snapshot */
+let uidSeq = 1;
+const uid = () => uidSeq++;
+
+/* the currently-mounted designer's undo, reachable from a document-level
+   Ctrl+Z (focus is often on body right after a commit re-render) */
+let activeUndo = null;
+if (typeof document !== 'undefined') {
+  document.addEventListener('keydown', e => {
+    if (!activeUndo) return;
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || String(e.key).toLowerCase() !== 'z') return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+    e.preventDefault();
+    activeUndo();
+  });
+}
+
 /** designer model from the shared parser model */
 function modelFromSchema(schema) {
   return (schema.tables || []).map(t => ({
+    _uid: uid(),
     name: t.name,
     origName: t.name,
     fks: t.fks.map(fk => ({ ...fk })),
@@ -61,6 +81,7 @@ function modelFromSchema(schema) {
         }
       }
       const col = {
+        _uid: uid(),
         name: c.name, type: st.type, args: st.args,
         uns: !!c.unsigned, nn: !!c.notNull, ai: !!c.autoInc, pk: !!c.pk,
         uq: !!c.unique, def: displayLit(c.dflt), chkMin, chkMax, rawCheck
@@ -80,9 +101,20 @@ function sameCol(a, b) {
     String(a.rawCheck || '') === String(b.rawCheck || '');
 }
 
+function parensBalanced(s) {
+  let depth = 0;
+  for (const ch of s) {
+    if (ch === '(') depth++;
+    else if (ch === ')' && --depth < 0) return false;
+  }
+  return depth === 0;
+}
+
 function defaultLit(d) {
   d = String(d).trim();
-  if (/^\(.*\)$/.test(d)) return d; // parenthesized expression — as-is
+  // parenthesized expression — as-is, but never emit unbalanced parens
+  // (a truncated capture once corrupted a whole schema.sql this way)
+  if (/^\(.*\)$/.test(d) && parensBalanced(d)) return d;
   // MySQL rule: only CURRENT_TIMESTAMP may stand bare after DEFAULT; other
   // functions must be expression defaults in parentheses (8.0.13+)
   if (/^(NOW\(\)|CURRENT_TIMESTAMP(\(\))?)$/i.test(d)) return 'CURRENT_TIMESTAMP';
@@ -233,7 +265,9 @@ function computeDiff(model, snapshotNames) {
         stmts.push('ALTER TABLE ' + tbl + ' ADD ' + fkDDL(fk));
       }
     }
-    if (t.name !== t.origName && String(t.name || '').trim()) {
+    // compare CLEANED names — "the_people " (trailing space) must not emit
+    // a no-op RENAME on every single commit
+    if (String(t.name || '').trim() && cleanIdent(t.name, t.origName) !== t.origName) {
       stmts.push('ALTER TABLE ' + tbl + ' RENAME TO `' + cleanIdent(t.name, t.origName) + '`');
     }
   }
@@ -256,6 +290,69 @@ export function mountTablesDesigner(host, schema, hooks) {
   let snapshotNames = model.map(t => t.origName);
   let committing = false;
   let commitTimer = null;
+
+  /* ---------- undo: snapshots of every committed state (this session) ---------- */
+  const snap = () => JSON.parse(JSON.stringify(model));
+  const history = [snap()];
+  let undoing = false;
+
+  async function undo() {
+    if (committing) return;
+    if (history.length < 2) {
+      if (hooks.toast) hooks.toast('Nothing to undo (in this session).');
+      return;
+    }
+    const current = history[history.length - 1];
+    const target = history[history.length - 2];
+    // live model = the PAST state, diffed against the PRESENT as baseline —
+    // the normal commit pipeline (fixups, confirms, journal) does the rest
+    const curT = {};
+    for (const t of current) curT[t._uid] = t;
+    const next = [];
+    for (const tt of JSON.parse(JSON.stringify(target))) {
+      const ct = curT[tt._uid];
+      if (!ct) {
+        // it existed then, not now → recreate (structure only)
+        tt.origName = null;
+        tt.origCols = [];
+        tt.origFkCols = [];
+        for (const c of tt.cols) c.orig = null;
+        next.push(tt);
+        continue;
+      }
+      const curC = {};
+      for (const c of ct.cols) curC[c._uid] = c;
+      for (const c of tt.cols) {
+        const cc = curC[c._uid];
+        c.orig = cc ? { ...cc } : null;
+        if (c.orig) { delete c.orig.orig; delete c.orig._open; }
+      }
+      tt.origName = ct.origName;
+      tt.origCols = ct.cols.map(c => c.name);
+      tt.origFkCols = (ct.fks || []).map(f => f.col);
+      // an FK whose target/rules changed needs the re-create flag
+      for (const f of tt.fks || []) {
+        const cf = (ct.fks || []).find(x => x.col === f.col);
+        if (cf && (cf.refTable !== f.refTable || cf.refCol !== f.refCol ||
+            (cf.onUpdate || null) !== (f.onUpdate || null) ||
+            (cf.onDelete || null) !== (f.onDelete || null))) {
+          f._redo = true;
+        }
+      }
+      next.push(tt);
+    }
+    model = next;
+    snapshotNames = current.map(t => t.origName).filter(Boolean);
+    history.pop();
+    undoing = true;
+    try {
+      render();
+      await commit('undo');
+    } finally {
+      undoing = false;
+    }
+    render(); // refresh the undo button state
+  }
 
   /* ---------- semi-live commit ---------- */
 
@@ -359,6 +456,7 @@ export function mountTablesDesigner(host, schema, hooks) {
         // refresh snapshots: everything on screen is now the committed truth
         for (const t of model) {
           t.origName = cleanIdent(t.name, t.origName || 'table');
+          t.name = t.origName; // shed stray spaces the cleaner removed
           t.cols = t.cols.filter(c => String(c.name || '').trim());
           // note: c._open survives — a commit must never slam the popup shut
           for (const c of t.cols) { c.name = cleanIdent(c.name, 'col'); c.args = normalizeArgs(c.type, c.args); c.orig = { ...c }; delete c.orig.orig; delete c.orig._open; }
@@ -368,6 +466,10 @@ export function mountTablesDesigner(host, schema, hooks) {
         }
         model = model.filter(t => t.origName);
         snapshotNames = model.map(t => t.origName);
+        if (!undoing) {
+          history.push(snap());
+          if (history.length > 100) history.shift();
+        }
         render();
       } else {
         // DB said no. If some statements DID apply, the file no longer
@@ -396,6 +498,13 @@ export function mountTablesDesigner(host, schema, hooks) {
   /* focus leaves the designer → commit; focus returns → hold */
   host.addEventListener('focusout', () => scheduleCommit('edit'));
   host.addEventListener('focusin', cancelScheduled);
+
+  /* Ctrl+Z anywhere (outside a text field, where it stays native) undoes
+     the last applied change while this designer is on screen */
+  activeUndo = () => {
+    const doc = host.ownerDocument;
+    if (doc && doc.body && doc.body.contains(host)) undo();
+  };
 
   /* ---------- rendering ---------- */
 
@@ -455,27 +564,39 @@ export function mountTablesDesigner(host, schema, hooks) {
       return b;
     };
 
-    /* every property the column has, written out, right on the row */
+    /* every property the column has, written out, right on the row —
+       click a tag to remove that property without opening the popup */
     const existingFk = (t.fks || []).find(f => f.col === (c.orig ? c.orig.name : c.name));
     const tags = el('span', 'dz-tags');
     if (c.pk) tags.appendChild(el('b', 'keytag', 'PK'));
     if (existingFk) {
-      tags.appendChild(el('b', 'keytag fk', 'FK → ' + existingFk.refTable + '.' + existingFk.refCol));
+      const k = el('button', 'keytag fk', 'FK → ' + existingFk.refTable + '.' + existingFk.refCol);
+      k.title = 'foreign key — click to open its settings';
+      k.addEventListener('click', () => { c._open = true; render(); });
+      tags.appendChild(k);
     }
-    const tag = txt => tags.appendChild(el('span', 'dz-tag', txt));
-    if (c.nn) tag('NOT NULL');
-    if (c.ai) tag('AUTO_INCREMENT');
-    if (c.uns) tag('UNSIGNED');
-    if (c.uq) tag('UNIQUE');
-    if (String(c.def || '').trim()) tag('DEFAULT ' + c.def);
+    const tag = (txt, clear, title) => {
+      const b = el('button', 'dz-tag', txt);
+      b.title = title || 'click to remove ' + txt;
+      b.addEventListener('click', () => {
+        clear();
+        render();
+        scheduleCommit('remove property');
+      });
+      tags.appendChild(b);
+    };
+    if (c.nn) tag('NOT NULL', () => { c.nn = false; });
+    if (c.ai) tag('AUTO_INCREMENT', () => { c.ai = false; });
+    if (c.uns) tag('UNSIGNED', () => { c.uns = false; });
+    if (c.uq) tag('UNIQUE', () => { c.uq = false; });
+    if (String(c.def || '').trim()) tag('DEFAULT ' + c.def, () => { c.def = ''; }, 'click to remove the default');
     const mn = String(c.chkMin || '').trim(), mx = String(c.chkMax || '').trim();
-    if (mn && mx) tag(mn + ' … ' + mx);
-    else if (mn) tag('min ' + mn);
-    else if (mx) tag('max ' + mx);
+    const clearRange = () => { c.chkMin = ''; c.chkMax = ''; };
+    if (mn && mx) tag(mn + ' … ' + mx, clearRange, 'allowed range — click to remove');
+    else if (mn) tag('min ' + mn, clearRange, 'click to remove the minimum');
+    else if (mx) tag('max ' + mx, clearRange, 'click to remove the maximum');
     if (String(c.rawCheck || '').trim()) {
-      const g = el('span', 'dz-tag', 'CHECK (…)');
-      g.title = c.rawCheck;
-      tags.appendChild(g);
+      tag('CHECK (…)', () => { c.rawCheck = ''; }, c.rawCheck + ' — click to remove');
     }
     row.appendChild(tags);
 
@@ -672,7 +793,7 @@ export function mountTablesDesigner(host, schema, hooks) {
       await commit('new column');       // Ben's rule: adding a row commits the last one
       const live = model.find(x => x === t) || model.find(x => x.origName === t.origName);
       if (!live) return;
-      live.cols.push({ name: '', type: 'VARCHAR', args: '255', uns: false, nn: true, ai: false, pk: false, uq: false, def: '', chkMin: '', chkMax: '', rawCheck: '', orig: null });
+      live.cols.push({ _uid: uid(), name: '', type: 'VARCHAR', args: '255', uns: false, nn: true, ai: false, pk: false, uq: false, def: '', chkMin: '', chkMax: '', rawCheck: '', orig: null });
       render();
       const cards = [...host.querySelectorAll('.dz-card')];
       const idx = model.indexOf(live);
@@ -691,13 +812,19 @@ export function mountTablesDesigner(host, schema, hooks) {
       model.length
         ? 'Edit anything — changes apply when you click away. Dropping things asks first.'
         : 'No tables yet. Add your first one:'));
+    const undoBtn = el('button', 'btn small', '↶ undo');
+    undoBtn.title = 'undo the last applied change (Ctrl+Z outside a text field)';
+    undoBtn.disabled = history.length < 2;
+    undoBtn.addEventListener('click', () => undo());
+    bar.appendChild(undoBtn);
     const addT = el('button', 'btn small primary', '+ add table');
     addT.addEventListener('click', async () => {
       cancelScheduled();
       await commit('new table');
       model.push({
+        _uid: uid(),
         name: '', origName: null, fks: [], origCols: [], extras: [],
-        cols: [{ name: 'id', type: 'INT', args: '', uns: true, nn: true, ai: true, pk: true, uq: false, def: '', chkMin: '', chkMax: '', rawCheck: '', orig: null }]
+        cols: [{ _uid: uid(), name: 'id', type: 'INT', args: '', uns: true, nn: true, ai: true, pk: true, uq: false, def: '', chkMin: '', chkMax: '', rawCheck: '', orig: null }]
       });
       render();
       const first = [...host.querySelectorAll('.dz-tname')].pop();

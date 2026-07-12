@@ -443,5 +443,98 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
     JSON.stringify(ran7));
 }
 
+// ---- the schema-eating bug: parser DEFAULT captures ----
+{
+  const s = parseSchema("CREATE TABLE d (a DATE DEFAULT (CURDATE()), b DECIMAL(4,2) DEFAULT 3.50, c INT);");
+  ck('nested-paren DEFAULT captured balanced', s.byName.d.columns[0].dflt === '(CURDATE())', s.byName.d.columns[0].dflt);
+  ck('decimal DEFAULT captured whole', s.byName.d.columns[1].dflt === '3.50', s.byName.d.columns[1].dflt);
+  ck('table survives regeneration round-trip',
+    parseSchema(createTableDDL(
+      // simulate the designer round-trip: model → DDL → parse again
+      (() => { const m = { name: 'd', cols: s.byName.d.columns.map(c => ({ name: c.name, type: c.type.replace(/\(.*/, ''), args: (c.type.match(/\(([^)]*)\)/) || [])[1] || '', def: c.dflt, nn: false })), fks: [] }; return m; })()
+    ) + ';').byName.d != null);
+}
+
+// ---- clicking a row tag removes the property ----
+{
+  const schema8 = parseSchema('CREATE TABLE t8 (id INT UNSIGNED NOT NULL AUTO_INCREMENT, note VARCHAR(40) NOT NULL, PRIMARY KEY(id));');
+  const ran8 = [];
+  const host8 = document.createElement('div');
+  document.body.appendChild(host8);
+  mountTablesDesigner(host8, schema8, {
+    runScript: async sql => { ran8.push(sql); return true; },
+    writeSchema: async () => {}, openTable: () => {}, reload: () => {}, toast: () => {}
+  });
+  const noteWrap = [...host8.querySelectorAll('.dz-colwrap')].find(w => w.querySelector('.dz-cname').value === 'note');
+  const nnTag = [...noteWrap.querySelectorAll('.dz-tag')].find(b => b.textContent === 'NOT NULL');
+  ck('NOT NULL shown as a tag', !!nnTag);
+  nnTag.click();
+  await tick(400);
+  ck('tag click removes the property', ran8.some(s => s.includes('MODIFY `note` VARCHAR(40)') && !s.includes('NOT NULL')), JSON.stringify(ran8));
+}
+
+// ---- no-op rename: a trailing space must not emit RENAME forever ----
+{
+  const schema9 = parseSchema('CREATE TABLE t9 (id INT UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY(id));');
+  const ran9 = [];
+  const host9 = document.createElement('div');
+  document.body.appendChild(host9);
+  mountTablesDesigner(host9, schema9, {
+    runScript: async sql => { ran9.push(sql); return true; },
+    writeSchema: async () => {}, openTable: () => {}, reload: () => {}, toast: () => {}
+  });
+  const tIn = [...host9.querySelectorAll('.dz-tname')].find(i => i.value === 't9');
+  tIn.value = 't9 ';
+  tIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  host9.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('trailing space is not a rename', ran9.length === 0, JSON.stringify(ran9));
+}
+
+// ---- undo: Ctrl+Z / ↶ replays the previous committed state ----
+{
+  const schemaU = parseSchema('CREATE TABLE u2 (id INT UNSIGNED NOT NULL AUTO_INCREMENT, label VARCHAR(30) NOT NULL, PRIMARY KEY(id));');
+  const ranU = [];
+  const hostU = document.createElement('div');
+  document.body.appendChild(hostU);
+  mountTablesDesigner(hostU, schemaU, {
+    runScript: async sql => { ranU.push(sql); return true; },
+    writeSchema: async () => {}, openTable: () => {}, reload: () => {}, toast: () => {}
+  });
+  const undoBtn = () => [...hostU.querySelectorAll('button')].find(b => b.textContent === '↶ undo');
+  ck('undo disabled with no history', undoBtn().disabled);
+
+  // rename label → tag, commit
+  const lIn = [...hostU.querySelectorAll('.dz-cname')].find(i => i.value === 'label');
+  lIn.value = 'tag_name';
+  lIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  hostU.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('rename committed', ranU.some(s => s.includes('CHANGE `label` `tag_name`')), JSON.stringify(ranU));
+  ck('undo enabled after a commit', !undoBtn().disabled);
+
+  // undo → reverse rename
+  ranU.length = 0;
+  undoBtn().click();
+  await tick(400);
+  ck('undo reverses the rename', ranU.some(s => s.includes('CHANGE `tag_name` `label`')), JSON.stringify(ranU));
+  ck('undo consumed its history entry', undoBtn().disabled);
+
+  // add a column, commit, undo → DROP COLUMN (confirm is mocked true)
+  ranU.length = 0;
+  [...hostU.querySelectorAll('button')].find(b => b.textContent === '+ column').click();
+  await tick(50);
+  const draftU = [...hostU.querySelectorAll('.dz-cname')].find(i => i.value === '');
+  draftU.value = 'extra';
+  draftU.dispatchEvent(new window.Event('input', { bubbles: true }));
+  hostU.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('column added', ranU.some(s => s.includes('ADD `extra`')), JSON.stringify(ranU));
+  ranU.length = 0;
+  undoBtn().click();
+  await tick(400);
+  ck('undo drops the added column', ranU.some(s => s.includes('DROP COLUMN `extra`')), JSON.stringify(ranU));
+}
+
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);

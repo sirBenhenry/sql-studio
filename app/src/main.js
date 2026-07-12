@@ -294,13 +294,32 @@ async function writeSchemaFromModel(model) {
     ? 'DROP DATABASE IF EXISTS ' + currentDb + ';\nCREATE DATABASE ' + currentDb + ';\nUSE ' + currentDb + ';\n'
     : '';
   const blocks = [];
+  const expect = [];
   for (const tbl of model) {
     // unnamed/empty drafts don't reach the file
     if (!String(tbl.name || '').trim() || !tbl.cols.some(c => String(c.name || '').trim())) continue;
     blocks.push(createTableDDL(tbl) + ';');
+    expect.push(tbl.name);
   }
   const text = '-- schema.sql — the database definition. Edited live by SQL Studio;\n-- you can also type here directly.\n\n' +
     header + '\n' + blocks.join('\n\n') + (blocks.length ? '\n' : '');
+  // self-check: the file must parse back to every table we meant to write.
+  // If it doesn't (a generator/parser mismatch), writing it would silently
+  // lose tables — fall back to DB truth instead. This class of bug once ate
+  // a table via a truncated DEFAULT (CURDATE()) capture.
+  try {
+    const back = window.parseSchema(text);
+    const missing = expect.filter(n => !back.byName[n]);
+    if (missing.length) {
+      logErr('schema.sql regeneration failed its self-check (lost: ' + missing.join(', ') + ') — re-syncing from the live database instead');
+      await syncSchemaFromDb();
+      return;
+    }
+  } catch (e) {
+    logErr('schema.sql regeneration failed its self-check — re-syncing from the live database instead');
+    await syncSchemaFromDb();
+    return;
+  }
   t.content = text;
   try {
     await invoke('file_write', { rel: 'schema.sql', content: text });

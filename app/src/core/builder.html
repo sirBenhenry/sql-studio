@@ -1262,9 +1262,20 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
   function parseColumnDef(def, table) {
     const m = def.match(/^[`"]?([\w$]+)[`"]?\s+([a-zA-Z]+(?:\s*\([^)]*\))?)/);
     if (!m) return;
-    // DEFAULT value: quoted string, (expression), or bare literal/function
-    const dm = def.match(/\bDEFAULT\s+('(?:[^']|'')*'|"(?:[^"]|"")*"|\([^)]*\)|[\w$]+(?:\s*\([^)]*\))?)/i);
-    let dflt = dm ? dm[1].trim() : '';
+    // DEFAULT value: number, quoted string, (expression) — read with balanced
+    // parens, DEFAULT (CURDATE()) must not truncate — or bare literal/function
+    let dflt = '';
+    const dm = def.match(/\bDEFAULT\s+/i);
+    if (dm) {
+      const at = dm.index + dm[0].length;
+      if (def[at] === '(') {
+        const bal = readBalanced(def, at);
+        if (bal) dflt = '(' + bal.body + ')';
+      } else {
+        const m2 = def.slice(at).match(/^(-?\d+(?:\.\d+)?|'(?:[^']|'')*'|"(?:[^"]|"")*"|[\w$]+(?:\s*\([^)]*\))?)/);
+        if (m2) dflt = m2[1].trim();
+      }
+    }
     if (/^NULL$/i.test(dflt)) dflt = ''; // the implicit default — not worth carrying
     // column-level CHECK (…) with balanced parens
     let check = '';
