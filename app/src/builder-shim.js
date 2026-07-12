@@ -92,7 +92,7 @@ const THEME_CSS = `
 
 /* the lite tool's empty-state notes talk about its own step-1 upload panel,
    which the IDE hides — reword them for the IDE world */
-const LOCK_NOTE = 'No tables yet — design one in the CREATE tab, or type CREATE TABLE statements into schema.sql.';
+const LOCK_NOTE = 'No tables yet — design one in the ⊞ database tab, or type CREATE TABLE statements into schema.sql.';
 
 export function mountBuilder(host, hooks) {
   // Neutralize the lite tool's own persistence before it boots: no tour,

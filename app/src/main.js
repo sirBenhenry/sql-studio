@@ -380,7 +380,8 @@ async function renderViewTab(t, host) {
         } catch (e) { logStmt(sql); logErr(String(e)); return null; }
       },
       journal: (source, stmts) => journal(source, stmts),
-      shouldConfirm: () => SETTINGS.confirmDelete
+      shouldConfirm: () => SETTINGS.confirmDelete,
+      rowLimit: () => SETTINGS.rowLimit
     });
   }
 }

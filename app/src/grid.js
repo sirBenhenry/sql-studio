@@ -11,7 +11,7 @@ export function mountGrid(host, table, hooks) {
     table,          // {name, columns:[{name,pk,autoInc,numeric,boolean}], pkCols:[names]}
     rows: [],
     columns: [],
-    limit: 500,
+    limit: (hooks.rowLimit && hooks.rowLimit()) || 500,
     dirty: false
   };
 
