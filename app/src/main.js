@@ -624,17 +624,17 @@ function askDbName(suggestion) {
     backdrop.hidden = false;
     input.focus();
     input.select();
+    const onKey = e => { if (e.key === 'Enter') done(); };
     const done = () => {
       const clean = input.value.trim().replace(/\s+/g, '_').replace(/[^\w$]/g, '') || suggestion;
       modal.hidden = true;
       backdrop.hidden = true;
       $('#dbname-ok').removeEventListener('click', done);
+      input.removeEventListener('keydown', onKey);
       resolve(clean);
     };
     $('#dbname-ok').addEventListener('click', done);
-    input.addEventListener('keydown', function onKey(e) {
-      if (e.key === 'Enter') { input.removeEventListener('keydown', onKey); done(); }
-    });
+    input.addEventListener('keydown', onKey);
   });
 }
 
@@ -736,11 +736,36 @@ function logResult(res) {
   }
 }
 
+const conHist = [];
+let conHistIdx = -1;   // -1 = editing a fresh line
+let conDraft = '';
 $('#console-input').addEventListener('keydown', e => {
+  const box = e.target;
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    if (!conHist.length) return;
+    e.preventDefault();
+    if (conHistIdx === -1) {
+      if (e.key === 'ArrowDown') return;
+      conDraft = box.value;
+      conHistIdx = conHist.length - 1;
+    } else if (e.key === 'ArrowUp') {
+      conHistIdx = Math.max(0, conHistIdx - 1);
+    } else if (++conHistIdx >= conHist.length) {
+      conHistIdx = -1;
+      box.value = conDraft;
+      return;
+    }
+    box.value = conHist[conHistIdx];
+    return;
+  }
   if (e.key !== 'Enter') return;
-  const sql = e.target.value.trim();
+  const sql = box.value.trim();
   if (!sql) return;
-  e.target.value = '';
+  if (conHist[conHist.length - 1] !== sql) conHist.push(sql);
+  if (conHist.length > 100) conHist.shift();
+  conHistIdx = -1;
+  conDraft = '';
+  box.value = '';
   // typed console statements are ad-hoc: executed but not journaled
   runScript(sql, 'console', { journal: false });
 });
@@ -788,7 +813,11 @@ builder = mountBuilder($('#builder-host'), {
 function wireSplitter(elSel, cssVar, horizontal) {
   const s = $(elSel);
   let dragging = false;
-  s.addEventListener('mousedown', () => { dragging = true; document.body.style.cursor = horizontal ? 'row-resize' : 'col-resize'; });
+  s.addEventListener('mousedown', e => {
+    e.preventDefault(); // don't select text while resizing
+    dragging = true;
+    document.body.style.cursor = horizontal ? 'row-resize' : 'col-resize';
+  });
   window.addEventListener('mouseup', () => { dragging = false; document.body.style.cursor = ''; });
   window.addEventListener('mousemove', e => {
     if (!dragging) return;

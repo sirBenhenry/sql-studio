@@ -64,6 +64,38 @@ ck('UPDATE addressed by PK',
   upd === "UPDATE `item` SET `name` = 'armchair' WHERE `id` = 2 LIMIT 1", upd);
 ck('update journaled', journaled.some(j => j.source.includes('edit item.name')));
 
+// --- blur commits an edit (Excel rule); Escape cancels; no-change is a no-op ---
+{
+  executed.length = 0;
+  const r2 = host.querySelectorAll('tbody tr')[1];
+  const td = r2.children[1];
+  td.dispatchEvent(new window.Event('dblclick', { bubbles: true }));
+  const e1 = td.querySelector('input');
+  e1.value = 'bench';
+  e1.dispatchEvent(new window.Event('blur'));
+  await tick(); await tick();
+  ck('blur commits the edit', executed.some(s => s.includes("SET `name` = 'bench'")), JSON.stringify(executed));
+
+  executed.length = 0;
+  const r2b = host.querySelectorAll('tbody tr')[1];
+  const td2 = r2b.children[1];
+  td2.dispatchEvent(new window.Event('dblclick', { bubbles: true }));
+  const e2 = td2.querySelector('input');
+  e2.value = 'ignored';
+  e2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await tick(); await tick();
+  ck('Escape cancels the edit', executed.length === 0, JSON.stringify(executed));
+
+  executed.length = 0;
+  const r2c = host.querySelectorAll('tbody tr')[1];
+  const td3 = r2c.children[1];
+  td3.dispatchEvent(new window.Event('dblclick', { bubbles: true }));
+  const e3 = td3.querySelector('input');
+  e3.dispatchEvent(new window.Event('blur')); // untouched value
+  await tick(); await tick();
+  ck('unchanged blur issues no UPDATE', executed.length === 0, JSON.stringify(executed));
+}
+
 // --- insert via the + row ---
 const newRow = host.querySelector('tr.new-row');
 const inputs = [...newRow.querySelectorAll('input')];

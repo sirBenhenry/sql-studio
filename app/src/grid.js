@@ -104,17 +104,25 @@ export function mountGrid(host, table, hooks) {
       const old = state.rows[rowIdx][colIdx];
       td.textContent = '';
       const inp = el('input', 'cell-edit');
-      inp.value = old == null ? '' : old;
+      const oldStr = old == null ? '' : String(old);
+      inp.value = oldStr;
       td.appendChild(inp);
       inp.focus();
       inp.select();
-      const commit = () => updateCell(rowIdx, colIdx, inp.value);
-      const cancel = () => render();
+      // clicking away commits, like everywhere else in the app; Escape cancels
+      let done = false;
+      const commit = () => {
+        if (done) return;
+        done = true;
+        if (inp.value === oldStr) { render(); return; } // nothing changed
+        updateCell(rowIdx, colIdx, inp.value);
+      };
+      const cancel = () => { if (done) return; done = true; render(); };
       inp.addEventListener('keydown', e => {
         if (e.key === 'Enter') commit();
         else if (e.key === 'Escape') cancel();
       });
-      inp.addEventListener('blur', cancel);
+      inp.addEventListener('blur', commit);
     });
   }
 
