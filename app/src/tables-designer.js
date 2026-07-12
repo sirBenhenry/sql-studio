@@ -138,10 +138,21 @@ export function createTableDDL(t) {
   return 'CREATE TABLE `' + cleanIdent(t.name, 'table') + '` (\n' + lines.join(',\n') + '\n)';
 }
 
+/** MODIFY/CHANGE re-emit UNIQUE and CHECK from scratch, but MySQL only ever
+ *  ADDS such constraints — the old ones must be dropped first or they pile
+ *  up (and a range could never be widened). The fixups list says what to
+ *  look up in information_schema and drop before the statement runs. */
+function colFixup(t, c) {
+  const hadCheck = String(c.orig.chkMin || '') || String(c.orig.chkMax || '') || String(c.orig.rawCheck || '');
+  const f = { table: t.origName, col: c.orig.name, dropChecks: !!hadCheck, dropUnique: !!c.orig.uq };
+  return (f.dropChecks || f.dropUnique) ? f : null;
+}
+
 /** the diff between the committed snapshot and the live cards */
 function computeDiff(model, snapshotNames) {
   const stmts = [];
   const destructive = [];
+  const fixups = [];
 
   for (const t of model) {
     const ready = String(t.name || '').trim() && t.cols.some(c => String(c.name || '').trim());
@@ -155,13 +166,18 @@ function computeDiff(model, snapshotNames) {
       if (!String(c.name || '').trim()) continue;
       if (!c.orig) {
         stmts.push('ALTER TABLE ' + tbl + ' ADD ' + colDDL(c));
+        if (c.pk) stmts.push('ALTER TABLE ' + tbl + ' ADD PRIMARY KEY(`' + cleanIdent(c.name, 'col') + '`)');
         continue;
       }
       seen.add(c.orig.name);
       if (c.name !== c.orig.name) {
         stmts.push('ALTER TABLE ' + tbl + ' CHANGE `' + c.orig.name + '` ' + colDDL(c));
+        const f = colFixup(t, c);
+        if (f) fixups.push(f);
       } else if (!sameCol(c, c.orig)) {
         stmts.push('ALTER TABLE ' + tbl + ' MODIFY ' + colDDL(c));
+        const f = colFixup(t, c);
+        if (f) fixups.push(f);
       }
     }
     for (const oc of t.origCols || []) {
@@ -170,7 +186,13 @@ function computeDiff(model, snapshotNames) {
         destructive.push('drop column ' + t.origName + '.' + oc);
       }
     }
-    // newly added foreign keys (removal needs the constraint name — later)
+    // foreign keys: removed ones need their constraint name looked up;
+    // new ones are a plain ADD
+    for (const oc of t.origFkCols || []) {
+      if (!(t.fks || []).some(f => f.col === oc)) {
+        fixups.push({ table: t.origName, col: oc, dropFk: true });
+      }
+    }
     for (const fk of t.fks || []) {
       if (!(t.origFkCols || []).includes(fk.col)) {
         stmts.push('ALTER TABLE ' + tbl + ' ADD ' + fkDDL(fk));
@@ -188,7 +210,7 @@ function computeDiff(model, snapshotNames) {
       destructive.push('drop table ' + name);
     }
   }
-  return { stmts, destructive };
+  return { stmts, destructive, fixups };
 }
 
 export function mountTablesDesigner(host, schema, hooks) {
@@ -202,10 +224,49 @@ export function mountTablesDesigner(host, schema, hooks) {
 
   /* ---------- semi-live commit ---------- */
 
+  /** turn fixups into concrete DROP statements by asking information_schema
+   *  for the auto-generated constraint/index names (best effort — if the
+   *  lookup fails, the worst case is MySQL rejecting and the cards reverting) */
+  async function resolveFixups(fixups) {
+    const pre = [];
+    if (!hooks.query) return pre;
+    for (const f of fixups) {
+      const tbl = '`' + f.table + '`';
+      try {
+        if (f.dropFk) {
+          const r = await hooks.query(
+            "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE " +
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + f.table + "' " +
+            "AND COLUMN_NAME = '" + f.col + "' AND REFERENCED_TABLE_NAME IS NOT NULL");
+          for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP FOREIGN KEY `' + row[0] + '`');
+        }
+        if (f.dropChecks) {
+          const like = f.col.replace(/([\\%_])/g, '\\$1');
+          const r = await hooks.query(
+            "SELECT cc.CONSTRAINT_NAME FROM information_schema.CHECK_CONSTRAINTS cc " +
+            "JOIN information_schema.TABLE_CONSTRAINTS tc ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA " +
+            "AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME " +
+            "WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.TABLE_NAME = '" + f.table + "' " +
+            "AND cc.CHECK_CLAUSE LIKE '%`" + like + "`%'");
+          for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP CHECK `' + row[0] + '`');
+        }
+        if (f.dropUnique) {
+          const r = await hooks.query(
+            "SELECT INDEX_NAME FROM information_schema.STATISTICS " +
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + f.table + "' " +
+            "AND NON_UNIQUE = 0 AND INDEX_NAME <> 'PRIMARY' " +
+            "GROUP BY INDEX_NAME HAVING COUNT(*) = 1 AND MAX(COLUMN_NAME) = '" + f.col + "'");
+          for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP INDEX `' + row[0] + '`');
+        }
+      } catch { /* engine offline etc. — skip, MySQL will arbitrate */ }
+    }
+    return pre;
+  }
+
   async function commit(reason) {
     if (committing) return;
-    const { stmts, destructive } = computeDiff(model, snapshotNames);
-    if (!stmts.length) return;
+    const { stmts, destructive, fixups } = computeDiff(model, snapshotNames);
+    if (!stmts.length && !fixups.length) return;
     if (destructive.length &&
         !window.confirm('This will permanently:\n  · ' + destructive.join('\n  · ') + '\n\nContinue?')) {
       reload(); // revert the cards to the committed state
@@ -214,8 +275,13 @@ export function mountTablesDesigner(host, schema, hooks) {
     committing = true;
     try {
       let partial = 0;
-      const ok = await hooks.runScript(stmts.join(';\n') + ';', 'designer: ' + reason,
-        { journal: true, onPartial: n => { partial = n; } });
+      const all = (await resolveFixups(fixups)).concat(stmts);
+      // an empty script (e.g. removing an FK the DB no longer has) still
+      // refreshes the file below — runScript would just complain
+      const ok = all.length
+        ? await hooks.runScript(all.join(';\n') + ';', 'designer: ' + reason,
+            { journal: true, onPartial: n => { partial = n; } })
+        : true;
       if (ok) {
         // table renames: MySQL re-points dependents' FOREIGN KEYs itself —
         // follow suit in the model so schema.sql doesn't reference old names
@@ -233,13 +299,20 @@ export function mountTablesDesigner(host, schema, hooks) {
             }
           }
         }
-        // column renames: follow them inside kept-verbatim KEY/CHECK lines
-        // (MySQL does the same to its indexes on CHANGE)
+        // column renames: follow them into FK references and kept-verbatim
+        // KEY/CHECK lines (MySQL re-points all of these itself on CHANGE)
         for (const t of model) {
           for (const c of t.cols) {
             const from = c.orig && c.orig.name;
             const to = cleanIdent(c.name, from || 'col');
-            if (from && from !== to && (t.extras || []).length) {
+            if (!from || from === to) continue;
+            for (const f of t.fks || []) if (f.col === from) f.col = to;
+            for (const ot of model) {
+              for (const f of ot.fks || []) {
+                if (f.refTable === t.origName && f.refCol === from) f.refCol = to;
+              }
+            }
+            if ((t.extras || []).length) {
               const esc = from.replace(/\$/g, '\\$');
               t.extras = t.extras.map(ex => ex
                 .replace(new RegExp('`' + esc + '`', 'g'), '`' + to + '`')
@@ -355,6 +428,9 @@ export function mountTablesDesigner(host, schema, hooks) {
     del.title = 'drop this column';
     del.addEventListener('click', () => {
       t.cols.splice(ci, 1);
+      // its foreign keys go with it (the DB won't drop an FK'd column)
+      const cn = c.orig ? c.orig.name : c.name;
+      t.fks = (t.fks || []).filter(f => f.col !== cn);
       render();
       commit('drop column');
     });
@@ -365,7 +441,11 @@ export function mountTablesDesigner(host, schema, hooks) {
     const hasExtras = c.uns || c.uq || String(c.def || '') || String(c.chkMin || '') || String(c.chkMax || '') || String(c.rawCheck || '') || existingFk;
     if (c._open || hasExtras) {
       const opts = el('div', 'dz-opts');
-      if (!c.orig) opts.appendChild(flag('PK', 'pk', 'primary key (new columns only)'));
+      // PK is offered only where it can actually apply: a new column in a
+      // table that doesn't have a primary key yet
+      if (!c.orig && !t.cols.some(x => x !== c && x.pk)) {
+        opts.appendChild(flag('PK', 'pk', 'primary key (new columns only)'));
+      }
       opts.appendChild(flag('UNSIGNED', 'uns', 'no negative values'));
       opts.appendChild(flag('UNIQUE', 'uq', 'no duplicate values'));
       const defIn = inp('dz-def', c.def, 'DEFAULT…', v => { c.def = v; });
@@ -400,15 +480,23 @@ export function mountTablesDesigner(host, schema, hooks) {
       if (existingFk) {
         fkRow.appendChild(el('span', 'dz-fkinfo', existingFk.refTable + '.' + existingFk.refCol +
           (existingFk.onUpdate || existingFk.onDelete ? '  (upd ' + (existingFk.onUpdate || '–') + ' / del ' + (existingFk.onDelete || '–') + ')' : '')));
+        const rmFk = el('button', 'iconbtn', '✕');
+        rmFk.title = 'remove this foreign key (the column stays)';
+        rmFk.addEventListener('click', () => {
+          t.fks = (t.fks || []).filter(f => f !== existingFk);
+          render();
+          commit('remove foreign key');
+        });
+        fkRow.appendChild(rmFk);
       } else {
         const refSel = el('select');
         const none = el('option', null, '— nothing —');
         none.value = '';
         refSel.appendChild(none);
         for (const ot of model) {
-          if (ot === t || !ot.origName) continue;
+          if (!ot.origName) continue; // committed tables only — incl. this one (self-reference)
           for (const oc of ot.cols) {
-            if (!oc.pk) continue;
+            if (!oc.pk || oc === c) continue;
             const o = el('option', null, ot.origName + ' . ' + oc.name);
             o.value = ot.origName + '|' + oc.name;
             refSel.appendChild(o);

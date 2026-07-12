@@ -401,6 +401,7 @@ function renderDbTab(host) {
   } else {
     designer = mountTablesDesigner(body, schemaModel(), {
       runScript,
+      query: async sql => await invoke('db_exec', { sql, db: currentDb }),
       writeSchema: writeSchemaFromModel,
       syncFromDb: syncSchemaFromDb,
       openTable: openTableGrid,

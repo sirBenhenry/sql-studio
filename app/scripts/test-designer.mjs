@@ -265,5 +265,119 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   ck('partial failure → file NOT written from the stale model', wrote === 0, wrote);
 }
 
+// ---- constraint lifecycle: drop-before-re-add via information_schema ----
+{
+  const schema5 = parseSchema(
+    'CREATE TABLE u (id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n' +
+    ' code VARCHAR(10) NOT NULL UNIQUE,\n' +
+    ' qty INT NOT NULL CHECK (`qty` BETWEEN 0 AND 10),\n' +
+    ' ref_id INT UNSIGNED,\n' +
+    ' PRIMARY KEY(id),\n' +
+    ' FOREIGN KEY(ref_id) REFERENCES u(id));');
+  const ran5 = [];
+  const queries = [];
+  const host5 = document.createElement('div');
+  document.body.appendChild(host5);
+  mountTablesDesigner(host5, schema5, {
+    runScript: async sql => { ran5.push(sql); return true; },
+    query: async sql => {
+      queries.push(sql);
+      if (sql.includes('CHECK_CONSTRAINTS')) return { columns: ['c'], rows: [['u_chk_1']] };
+      if (sql.includes('STATISTICS')) return { columns: ['i'], rows: [['code']] };
+      if (sql.includes('KEY_COLUMN_USAGE')) return { columns: ['c'], rows: [['u_ibfk_1']] };
+      return { columns: [], rows: [] };
+    },
+    writeSchema: async () => {}, openTable: () => {}, reload: () => {}, toast: () => {}
+  });
+
+  // widen the CHECK range → the old auto-named constraint must drop first
+  const openOpts = name => {
+    const w = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === name);
+    if (!w.querySelector('.dz-opts')) w.querySelector('.dz-more').click();
+  };
+  openOpts('qty');
+  const qtyWrap = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === 'qty');
+  const maxIn = [...qtyWrap.querySelectorAll('input')].find(i => i.placeholder === 'max…');
+  maxIn.value = '500';
+  maxIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  host5.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('check edit: DROP CHECK precedes MODIFY',
+    ran5.length === 1 &&
+    ran5[0].indexOf('DROP CHECK `u_chk_1`') > -1 &&
+    ran5[0].indexOf('DROP CHECK `u_chk_1`') < ran5[0].indexOf('MODIFY `qty`'),
+    JSON.stringify(ran5));
+  ck('check edit: new range in the MODIFY', ran5[0].includes('BETWEEN 0 AND 500'), ran5[0]);
+
+  // uncheck UNIQUE → the index really drops
+  ran5.length = 0;
+  const codeWrap = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === 'code');
+  const uqFlag = [...codeWrap.querySelectorAll('button')].find(b => b.textContent === 'UNIQUE');
+  uqFlag.click();
+  await tick(400);
+  ck('unique off: DROP INDEX emitted', ran5.some(s => s.includes('DROP INDEX `code`')), JSON.stringify(ran5));
+  ck('unique off: MODIFY without UNIQUE', ran5.some(s => s.includes('MODIFY `code` VARCHAR(10) NOT NULL') && !s.includes('UNIQUE')), JSON.stringify(ran5));
+
+  // remove the (self-referencing) FK → constraint name looked up and dropped
+  ran5.length = 0;
+  openOpts('ref_id');
+  const refWrap = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === 'ref_id');
+  const rmFk = [...refWrap.querySelectorAll('.dz-fkrow .iconbtn')].pop();
+  rmFk.click();
+  await tick(400);
+  ck('FK removal: DROP FOREIGN KEY by looked-up name',
+    ran5.some(s => s.includes('DROP FOREIGN KEY `u_ibfk_1`')), JSON.stringify(ran5));
+
+  // self-reference offered in the FK dropdown of a fresh column
+  ran5.length = 0;
+  [...host5.querySelectorAll('button')].find(b => b.textContent === '+ column').click();
+  await tick(100);
+  const draft5 = [...host5.querySelectorAll('.dz-cname')].find(i => i.value === '');
+  draft5.value = 'parent_id';
+  draft5.dispatchEvent(new window.Event('input', { bubbles: true }));
+  host5.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  const pWrap = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname') && x.querySelector('.dz-cname').value === 'parent_id');
+  pWrap.querySelector('.dz-more').click();
+  await tick(50);
+  const pWrap2 = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname') && x.querySelector('.dz-cname').value === 'parent_id');
+  const sel5 = pWrap2.querySelector('.dz-fkrow select');
+  ck('FK dropdown offers own table (self-reference)',
+    [...sel5.options].some(o => o.value === 'u|id'), [...sel5.options].map(o => o.value).join(','));
+
+  // PK on a new column of an existing table (which already has a PK):
+  // flag hidden — and for a PK-less table the ADD PRIMARY KEY is emitted
+  ck('PK flag hidden when the table already has a PK',
+    ![...pWrap2.querySelectorAll('button')].some(b => b.textContent === 'PK'),
+    [...pWrap2.querySelectorAll('button')].map(b => b.textContent).join(','));
+}
+
+// ---- PK on a new column of a PK-less existing table → ADD PRIMARY KEY ----
+{
+  const schema6 = parseSchema('CREATE TABLE nopk (a INT, b VARCHAR(10));');
+  const ran6 = [];
+  const host6 = document.createElement('div');
+  document.body.appendChild(host6);
+  mountTablesDesigner(host6, schema6, {
+    runScript: async sql => { ran6.push(sql); return true; },
+    writeSchema: async () => {}, openTable: () => {}, reload: () => {}, toast: () => {}
+  });
+  [...host6.querySelectorAll('button')].find(b => b.textContent === '+ column').click();
+  await tick(100);
+  const d6 = [...host6.querySelectorAll('.dz-cname')].find(i => i.value === '');
+  d6.value = 'id';
+  d6.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const w6 = d6.closest('.dz-colwrap');
+  w6.querySelector('.dz-more').click();
+  await tick(50);
+  const w6b = [...host6.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname') && x.querySelector('.dz-cname').value === 'id');
+  const pkFlag = [...w6b.querySelectorAll('button')].find(b => b.textContent === 'PK');
+  ck('PK flag offered on PK-less table', !!pkFlag);
+  pkFlag.click();
+  await tick(400);
+  ck('new col PK → ADD then ADD PRIMARY KEY',
+    ran6.some(s => s.includes('ADD `id`') && s.includes('ADD PRIMARY KEY(`id`)')), JSON.stringify(ran6));
+}
+
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);
