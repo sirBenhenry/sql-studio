@@ -383,6 +383,26 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 }
 #btn-settings:hover { color: var(--accent); border-color: var(--accent); }
 
+/* name-the-database prompt (same visual family as settings) */
+#dbname-backdrop {
+  position: fixed; inset: 0; z-index: 92;
+  background: color-mix(in srgb, var(--ink) 45%, transparent);
+}
+#dbname-modal {
+  position: fixed; z-index: 93;
+  top: 50%; left: 50%; transform: translate(-50%, -60%);
+  width: min(420px, calc(100vw - 32px));
+  background: var(--bg); color: var(--ink);
+  border: 2px solid var(--ink);
+  box-shadow: 0 14px 40px rgba(0,0,0,.4);
+  padding: 20px 22px 18px;
+}
+#dbname-modal h3 {
+  margin: 0 0 8px; font-size: .8rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .1em;
+}
+#dbname-modal .hint { margin: 0 0 12px; }
+
 /* ================= toast ================= */
 #toast {
   position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%) translateY(20px);

@@ -435,14 +435,58 @@ async function startEngine(root) {
   }
 }
 
-/** On open: a fresh sandbox gets built from schema.sql + data.sql; an
- *  existing one just resolves the current database. The builder is fed
- *  the schema either way. */
+/** Modal: ask for the database name (used on brand-new projects).
+ *  Resolves with a sanitized identifier. */
+function askDbName(suggestion) {
+  return new Promise(resolve => {
+    const modal = $('#dbname-modal');
+    const backdrop = $('#dbname-backdrop');
+    const input = $('#dbname-input');
+    input.value = suggestion;
+    modal.hidden = false;
+    backdrop.hidden = false;
+    input.focus();
+    input.select();
+    const done = () => {
+      const clean = input.value.trim().replace(/\s+/g, '_').replace(/[^\w$]/g, '') || suggestion;
+      modal.hidden = true;
+      backdrop.hidden = true;
+      $('#dbname-ok').removeEventListener('click', done);
+      resolve(clean);
+    };
+    $('#dbname-ok').addEventListener('click', done);
+    input.addEventListener('keydown', function onKey(e) {
+      if (e.key === 'Enter') { input.removeEventListener('keydown', onKey); done(); }
+    });
+  });
+}
+
+/** On open: a fresh sandbox gets built from schema.sql + data.sql; a brand-new
+ *  project first asks for a database name and writes the CREATE DATABASE
+ *  header itself; an existing one just resolves the current database. */
 async function reconcile() {
-  const schemaText = tabById('schema') ? tabById('schema').content : '';
+  let schemaText = tabById('schema') ? tabById('schema').content : '';
   try {
     const res = await invoke('db_exec', { sql: 'SHOW DATABASES', db: null });
     const userDbs = res.rows.map(r => r[0]).filter(d => d && !SYSTEM_DBS.has(d));
+
+    // brand-new project: schema has no database yet → name it, write the header
+    if (!userDbs.length && !findCurrentDb(schemaText)) {
+      const suggestion = (project ? project.name : 'my_database')
+        .trim().replace(/\s+/g, '_').replace(/[^\w$]/g, '').toLowerCase() || 'my_database';
+      const name = await askDbName(suggestion);
+      const header = 'DROP DATABASE IF EXISTS ' + name + ';\nCREATE DATABASE ' + name + ';\nUSE ' + name + ';\n';
+      const t = tabById('schema');
+      let cur = t.content;
+      if (cur && !cur.endsWith('\n')) cur += '\n';
+      t.content = cur + header;
+      schemaText = t.content;
+      await invoke('file_write', { rel: 'schema.sql', content: t.content });
+      t.savedContent = t.content;
+      if (activeTab === 'schema') editor.value = t.content;
+      renderTabs();
+    }
+
     if (!userDbs.length && splitSQL(schemaText).length) {
       logNote('fresh sandbox — building the database from schema.sql…');
       const ok = await runScript(schemaText, 'seed: schema.sql', { journal: false });

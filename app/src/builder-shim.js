@@ -18,6 +18,9 @@ const HIDE_CSS = `
      no practice lists, no long explainer hints */
   .sql-card, .practice { display: none !important; }
   .card > .hint, #builder-section > .hint { display: none !important; }
+  /* the project IS the database — no start-from-scratch toggle; the IDE
+     names the database itself and CREATE always extends it */
+  .boiler-row, #extend-note { display: none !important; }
 
   main { padding: 0 12px 64px; max-width: none; }
   .card { padding-top: 14px; padding-bottom: 16px; margin-top: 10px; }
@@ -147,6 +150,13 @@ export function mountBuilder(host, hooks) {
 
     // reword the lite tool's "load a database in step 1" empty-state notes
     for (const n of d.querySelectorAll('.lock-note')) n.textContent = LOCK_NOTE;
+
+    // CREATE always extends the project's database — never "from scratch"
+    const boiler = d.querySelector('#chk-boiler');
+    if (boiler && boiler.checked) {
+      boiler.checked = false;
+      boiler.dispatchEvent(new frame.contentWindow.Event('change', { bubbles: true }));
+    }
 
     const panelText = sel => (d.querySelector(sel) ? d.querySelector(sel).textContent : '');
     const liteApplyAlter = d.querySelector('#btn-apply-alter');

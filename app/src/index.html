@@ -21,6 +21,18 @@
     </div>
   </header>
 
+  <!-- ======= name-the-database prompt ======= -->
+  <div id="dbname-backdrop" hidden></div>
+  <div id="dbname-modal" hidden>
+    <h3>Name your database</h3>
+    <p class="hint">Every project is one live database. This name goes into
+      <code>schema.sql</code> as <code>CREATE DATABASE …</code> — you can rename it later.</p>
+    <input id="dbname-input" class="set-num" style="width:100%" type="text" spellcheck="false" />
+    <div class="btn-row" style="margin-top:14px; margin-bottom:0; justify-content:flex-end">
+      <button class="btn primary" id="dbname-ok">Create database</button>
+    </div>
+  </div>
+
   <!-- ======= settings ======= -->
   <div id="settings-backdrop" hidden></div>
   <div id="settings-modal" hidden>
