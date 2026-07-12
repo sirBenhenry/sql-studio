@@ -159,8 +159,6 @@ export function mountBuilder(host, hooks) {
     }
 
     const panelText = sel => (d.querySelector(sel) ? d.querySelector(sel).textContent : '');
-    const liteApplyAlter = d.querySelector('#btn-apply-alter');
-    const liteToSelect = d.querySelector('#btn-to-select');
 
     /* ---- the mode-contextual actions (executed through the IDE hooks) ---- */
     const ACTIONS = {
@@ -199,8 +197,9 @@ export function mountBuilder(host, hooks) {
         run: async sql => {
           const ok = await hooks.runScript(sql, 'builder: create', { journal: true });
           if (!ok) return false;
-          if (liteToSelect) liteToSelect.click(); // lite merges new tables into its schema text
-          hooks.schemaChanged(api.readSchemaText());
+          // the IDE appends to schema.sql itself (the lite tool's own merge
+          // REPLACES its text when it has no parsed tables — data loss)
+          hooks.appendSchema(sql);
           return true;
         }
       },
@@ -211,8 +210,9 @@ export function mountBuilder(host, hooks) {
         run: async sql => {
           const ok = await hooks.runScript(sql, 'builder: alter', { journal: true });
           if (!ok) return false;
-          if (liteApplyAlter) liteApplyAlter.click(); // lite folds the change into its schema text + model
-          hooks.schemaChanged(api.readSchemaText());
+          // schema.sql accumulates the ALTERs; the parser applies them in
+          // document order, so the model (and the builder) stay correct
+          hooks.appendSchema(sql);
           return true;
         }
       }

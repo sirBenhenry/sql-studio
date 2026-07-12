@@ -195,6 +195,25 @@ function enterProject(p) {
 /* ================= tabs + editor ================= */
 
 const editor = $('#editor');
+const editorHl = $('#editor-hl');
+const editorHlCode = $('#editor-hl-code');
+
+/* live SQL highlighting: the pre behind the textarea repaints on every
+   change (SqlGen.highlightStatic — same tokenizer as the lite tool) */
+function updateHighlight() {
+  // trailing newline keeps the pre's height in sync with the textarea
+  editorHlCode.innerHTML = window.SqlGen.highlightStatic(editor.value) + '\n';
+  syncHlScroll();
+}
+function syncHlScroll() {
+  editorHl.scrollTop = editor.scrollTop;
+}
+editor.addEventListener('scroll', syncHlScroll);
+
+function setEditorText(text) {
+  editor.value = text;
+  updateHighlight();
+}
 
 function tabById(id) { return tabs.find(t => t.id === id); }
 
@@ -243,6 +262,7 @@ function activateTab(id) {
   activeTab = id;
   if (t.kind === 'view') {
     editor.style.display = 'none';
+    editorHl.style.display = 'none';
     const v = viewHost();
     v.style.display = '';
     renderViewTab(t, v);
@@ -250,7 +270,8 @@ function activateTab(id) {
     const v = $('#view-host');
     if (v) v.style.display = 'none';
     editor.style.display = '';
-    editor.value = t.content;
+    editorHl.style.display = '';
+    setEditorText(t.content);
     editor.readOnly = !!t.readonly;
   }
   renderTabs();
@@ -306,6 +327,7 @@ function openTableGrid(name) {
 }
 
 editor.addEventListener('input', () => {
+  updateHighlight();
   const t = tabById(activeTab);
   if (!t || t.readonly || t.kind === 'view') return;
   t.content = editor.value;
@@ -414,7 +436,7 @@ async function journal(source, statements) {
     if (t) {
       t.content += entry;
       t.savedContent = t.content;
-      if (activeTab === 'journal') editor.value = t.content;
+      if (activeTab === 'journal') setEditorText(t.content);
     }
   } catch (e) { logErr('journal write failed: ' + e); }
 }
@@ -483,7 +505,7 @@ async function reconcile() {
       schemaText = t.content;
       await invoke('file_write', { rel: 'schema.sql', content: t.content });
       t.savedContent = t.content;
-      if (activeTab === 'schema') editor.value = t.content;
+      if (activeTab === 'schema') setEditorText(t.content);
       renderTabs();
     }
 
@@ -580,29 +602,34 @@ async function appendData(sql) {
   try {
     await invoke('file_write', { rel: 'data.sql', content: cur });
     t.savedContent = cur;
-    if (activeTab === 'data') editor.value = cur;
+    if (activeTab === 'data') setEditorText(cur);
     renderTabs();
   } catch (e) { logErr('data.sql write failed: ' + e); }
 }
 
-/** the builder changed the schema (CREATE/ALTER applied): schema.sql follows */
-async function schemaChanged(newSchemaText) {
+/** the builder applied schema statements (CREATE/ALTER): append them to
+ *  schema.sql — never replace the file — and re-feed the builder's model */
+async function appendSchema(sql) {
   const t = tabById('schema');
   if (!t) return;
-  t.content = newSchemaText;
+  let cur = t.content;
+  if (cur && !cur.endsWith('\n')) cur += '\n';
+  cur += '\n' + sql.trim() + '\n';
+  t.content = cur;
   try {
-    await invoke('file_write', { rel: 'schema.sql', content: newSchemaText });
-    t.savedContent = newSchemaText;
-    if (activeTab === 'schema') editor.value = newSchemaText;
+    await invoke('file_write', { rel: 'schema.sql', content: cur });
+    t.savedContent = cur;
+    if (activeTab === 'schema') setEditorText(cur);
     renderTabs();
     logNote('schema.sql updated');
   } catch (e) { logErr('schema.sql write failed: ' + e); }
+  if (builder) builder.setSchema(cur);
 }
 
 builder = mountBuilder($('#builder-host'), {
   runScript,
   appendData,
-  schemaChanged,
+  appendSchema,
   onReady() {
     builder.setLang(LANG);
     builder.setTheme(SETTINGS.theme);

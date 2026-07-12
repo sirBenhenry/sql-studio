@@ -215,19 +215,42 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
 .ftab .dirty { color: var(--accent); font-weight: 700; }
 .ftab.add-tab { font-family: inherit; font-weight: 700; }
 
-#editor-host { flex: 1; min-height: 0; position: relative; }
-#editor {
+#editor-host { flex: 1; min-height: 0; position: relative; background: var(--bg); }
+/* the editor is a transparent-text textarea over a highlighted <pre>;
+   both share EXACT font metrics so glyphs align perfectly */
+#editor, #editor-hl {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
-  border: 0; resize: none; outline: none;
-  background: var(--bg); color: var(--ink);
+  margin: 0; border: 0;
   font-family: var(--mono); font-size: .86rem; line-height: 1.6;
   padding: 12px 14px;
-  user-select: text;
   tab-size: 2;
-  white-space: pre-wrap;       /* wrap long lines — no sideways scrolling */
-  overflow-x: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto; overflow-x: hidden;
 }
+#editor {
+  resize: none; outline: none;
+  background: transparent;
+  color: transparent;           /* the pre paints the glyphs */
+  caret-color: var(--ink);
+  user-select: text;
+  z-index: 1;
+}
+#editor::selection { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+#editor-hl {
+  pointer-events: none;
+  z-index: 0;
+  color: var(--ink);
+  overflow: hidden;             /* scroll is mirrored from the textarea */
+}
+#editor-hl code { font: inherit; }
+/* SQL token colors on the light/dark page (not the black poster palette) */
+#editor-hl .k { color: var(--accent); font-weight: 700; }
+#editor-hl .f { color: var(--cat-col); font-weight: 600; }
+#editor-hl .s { color: var(--cat-cond); }
+#editor-hl .n { color: var(--cat-sort); }
+#editor-hl .c { color: var(--muted); font-style: italic; }
 
 /* ================= console ================= */
 .engine-status { font-family: var(--mono); font-size: .68rem; text-transform: none; letter-spacing: 0; }
