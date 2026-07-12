@@ -90,8 +90,8 @@ fn current_root(state: &tauri::State<ProjectState>) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn project_create(
-    state: tauri::State<ProjectState>,
+pub async fn project_create(
+    state: tauri::State<'_, ProjectState>,
     path: String,
 ) -> Result<Project, String> {
     let root = PathBuf::from(&path);
@@ -109,7 +109,7 @@ pub fn project_create(
 }
 
 #[tauri::command]
-pub fn project_open(state: tauri::State<ProjectState>, path: String) -> Result<Project, String> {
+pub async fn project_open(state: tauri::State<'_, ProjectState>, path: String) -> Result<Project, String> {
     let root = PathBuf::from(&path);
     if !root.join("schema.sql").exists() {
         return Err("no schema.sql here — not a SQL Studio project (use Create)".into());
@@ -121,8 +121,8 @@ pub fn project_open(state: tauri::State<ProjectState>, path: String) -> Result<P
 }
 
 #[tauri::command]
-pub fn file_write(
-    state: tauri::State<ProjectState>,
+pub async fn file_write(
+    state: tauri::State<'_, ProjectState>,
     rel: String,
     content: String,
 ) -> Result<(), String> {
@@ -135,14 +135,14 @@ pub fn file_write(
 }
 
 #[tauri::command]
-pub fn file_read(state: tauri::State<ProjectState>, rel: String) -> Result<String, String> {
+pub async fn file_read(state: tauri::State<'_, ProjectState>, rel: String) -> Result<String, String> {
     let root = current_root(&state)?;
     let path = resolve(&root, &rel)?;
     fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn journal_append(state: tauri::State<ProjectState>, entry: String) -> Result<(), String> {
+pub async fn journal_append(state: tauri::State<'_, ProjectState>, entry: String) -> Result<(), String> {
     let root = current_root(&state)?;
     let path = root.join("journal.sql");
     let mut cur = read_or(&path, JOURNAL_TEMPLATE);

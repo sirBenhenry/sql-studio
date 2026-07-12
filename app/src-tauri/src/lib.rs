@@ -23,6 +23,18 @@ pub fn run() {
             engine::db_status,
             engine::db_exec
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // guarantee the engine dies with the app — Drop isn't reliable on
+            // process exit, and an orphaned mysqld locks the project datadir
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Some(state) = app.try_state::<engine::EngineState>() {
+                    if let Ok(mut eng) = state.0.lock() {
+                        eng.stop();
+                    }
+                }
+            }
+        });
 }

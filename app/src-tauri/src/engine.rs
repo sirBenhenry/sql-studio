@@ -28,6 +28,11 @@ impl Drop for Engine {
 }
 
 impl Engine {
+    /// public stop for the app-exit hook
+    pub fn stop(&mut self) {
+        self.shutdown();
+    }
+
     fn shutdown(&mut self) {
         if let Some(pool) = self.pool.take() {
             if let Ok(mut conn) = pool.get_conn() {
@@ -189,10 +194,32 @@ fn value_to_string(v: Value) -> Option<String> {
     }
 }
 
+/// If a previous SQL Studio session died without a clean shutdown, its mysqld
+/// keeps running and holds the datadir lock — a new engine would then hang at
+/// startup. mysqld writes `<hostname>.pid` into the datadir; kill that stale
+/// process before starting ours.
+fn reclaim_stale_engine(datadir: &Path) {
+    let Ok(entries) = std::fs::read_dir(datadir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().map(|x| x == "pid").unwrap_or(false) {
+            if let Ok(pid_txt) = std::fs::read_to_string(&p) {
+                if let Ok(pid) = pid_txt.trim().parse::<u32>() {
+                    let mut cmd = Command::new("taskkill");
+                    cmd.args(["/PID", &pid.to_string(), "/F"]);
+                    no_window(&mut cmd);
+                    let _ = cmd.output(); // best-effort; fails harmlessly if gone
+                }
+            }
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
 #[tauri::command]
-pub fn db_start(
+pub async fn db_start(
     app: tauri::AppHandle,
-    state: tauri::State<EngineState>,
+    state: tauri::State<'_, EngineState>,
     project_root: String,
 ) -> Result<EngineInfo, String> {
     let mut eng = state.0.lock().map_err(|e| e.to_string())?;
@@ -202,6 +229,8 @@ pub fn db_start(
     let datadir = PathBuf::from(&project_root).join(".sqlstudio").join("db");
     if !datadir.join("mysql.ibd").exists() {
         initialize_datadir(&engine, &datadir)?;
+    } else {
+        reclaim_stale_engine(&datadir);
     }
 
     let port = free_port()?;
@@ -230,13 +259,13 @@ pub fn db_start(
 }
 
 #[tauri::command]
-pub fn db_stop(state: tauri::State<EngineState>) -> Result<(), String> {
+pub async fn db_stop(state: tauri::State<'_, EngineState>) -> Result<(), String> {
     state.0.lock().map_err(|e| e.to_string())?.shutdown();
     Ok(())
 }
 
 #[tauri::command]
-pub fn db_status(state: tauri::State<EngineState>) -> Result<EngineInfo, String> {
+pub async fn db_status(state: tauri::State<'_, EngineState>) -> Result<EngineInfo, String> {
     let eng = state.0.lock().map_err(|e| e.to_string())?;
     Ok(EngineInfo {
         running: eng.pool.is_some(),
@@ -351,8 +380,8 @@ mod tests {
 }
 
 #[tauri::command]
-pub fn db_exec(
-    state: tauri::State<EngineState>,
+pub async fn db_exec(
+    state: tauri::State<'_, EngineState>,
     sql: String,
     db: Option<String>,
 ) -> Result<ExecResult, String> {
