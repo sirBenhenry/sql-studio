@@ -325,7 +325,8 @@ export function mountTablesDesigner(host, schema, hooks) {
         for (const t of model) {
           t.origName = cleanIdent(t.name, t.origName || 'table');
           t.cols = t.cols.filter(c => String(c.name || '').trim());
-          for (const c of t.cols) { c.name = cleanIdent(c.name, 'col'); delete c._open; c.orig = { ...c }; delete c.orig.orig; }
+          // note: c._open survives — a commit must never slam the popup shut
+          for (const c of t.cols) { c.name = cleanIdent(c.name, 'col'); c.orig = { ...c }; delete c.orig.orig; delete c.orig._open; }
           t.origCols = t.cols.map(c => c.name);
           t.origFkCols = (t.fks || []).map(f => f.col);
         }
@@ -395,31 +396,46 @@ export function mountTablesDesigner(host, schema, hooks) {
     row.appendChild(typeSel);
     row.appendChild(inp('dz-args', c.args, '(…)', v => { c.args = v; }));
 
+    /* property toggles live in the popup; they apply when it closes
+       (or when focus leaves the designer — the usual semi-live rule) */
     const flag = (label, key, title) => {
       const b = el('button', 'flag' + (c[key] ? ' on' : ''), label);
       if (title) b.title = title;
       b.addEventListener('click', () => {
         c[key] = !c[key];
         b.classList.toggle('on', c[key]);
-        scheduleCommit('flag');
       });
       return b;
     };
-    row.appendChild(flag('NN', 'nn', 'NOT NULL'));
-    row.appendChild(flag('AI', 'ai', 'AUTO_INCREMENT'));
 
-    if (c.pk) row.appendChild(el('b', 'keytag', 'PK'));
+    /* every property the column has, written out, right on the row */
     const existingFk = (t.fks || []).find(f => f.col === (c.orig ? c.orig.name : c.name));
+    const tags = el('span', 'dz-tags');
+    if (c.pk) tags.appendChild(el('b', 'keytag', 'PK'));
     if (existingFk) {
-      const tag = el('b', 'keytag fk', 'FK');
-      tag.title = '→ ' + existingFk.refTable + '.' + existingFk.refCol;
-      row.appendChild(tag);
+      tags.appendChild(el('b', 'keytag fk', 'FK → ' + existingFk.refTable + '.' + existingFk.refCol));
     }
+    const tag = txt => tags.appendChild(el('span', 'dz-tag', txt));
+    if (c.nn) tag('NOT NULL');
+    if (c.ai) tag('AUTO_INCREMENT');
+    if (c.uns) tag('UNSIGNED');
+    if (c.uq) tag('UNIQUE');
+    if (String(c.def || '').trim()) tag('DEFAULT ' + c.def);
+    const mn = String(c.chkMin || '').trim(), mx = String(c.chkMax || '').trim();
+    if (mn && mx) tag(mn + ' … ' + mx);
+    else if (mn) tag('min ' + mn);
+    else if (mx) tag('max ' + mx);
+    if (String(c.rawCheck || '').trim()) {
+      const g = el('span', 'dz-tag', 'CHECK (…)');
+      g.title = c.rawCheck;
+      tags.appendChild(g);
+    }
+    row.appendChild(tags);
 
-    const more = el('button', 'iconbtn dz-more', '⋯');
-    more.title = 'more options: unique, unsigned, default, allowed range, foreign key';
+    const more = el('button', 'flag dz-more', tags.childNodes.length ? 'properties' : '+ properties');
+    more.title = 'not null, auto increment, unique, unsigned, default, allowed range, foreign key';
     more.addEventListener('click', () => {
-      c._open = !c._open;
+      c._open = true;
       render();
     });
     row.appendChild(more);
@@ -437,42 +453,64 @@ export function mountTablesDesigner(host, schema, hooks) {
     row.appendChild(del);
     wrap.appendChild(row);
 
-    /* --- options row (⋯): unsigned/unique/default/range --- */
-    const hasExtras = c.uns || c.uq || String(c.def || '') || String(c.chkMin || '') || String(c.chkMax || '') || String(c.rawCheck || '') || existingFk;
-    if (c._open || hasExtras) {
+    /* --- the properties popup: everything settable in one place; closes on
+       ✕ or a click anywhere outside, and that close applies the changes --- */
+    if (c._open) {
+      const closePop = () => {
+        c._open = false;
+        render();
+        scheduleCommit('properties');
+      };
+      const back = el('div', 'dz-popback');
+      back.addEventListener('click', closePop);
+      wrap.appendChild(back);
+
+      const pop = el('div', 'dz-pop');
+      const popHead = el('div', 'dz-pop-head');
+      popHead.appendChild(el('span', null, 'properties · ' + (String(c.name || '').trim() || 'new column')));
+      const closeBtn = el('button', 'iconbtn', '✕');
+      closeBtn.title = 'close — the changes apply now';
+      closeBtn.addEventListener('click', closePop);
+      popHead.appendChild(closeBtn);
+      pop.appendChild(popHead);
+
       const opts = el('div', 'dz-opts');
       // PK is offered only where it can actually apply: a new column in a
       // table that doesn't have a primary key yet
       if (!c.orig && !t.cols.some(x => x !== c && x.pk)) {
-        opts.appendChild(flag('PK', 'pk', 'primary key (new columns only)'));
+        opts.appendChild(flag('PRIMARY KEY', 'pk', 'primary key (new columns only)'));
       }
+      opts.appendChild(flag('NOT NULL', 'nn', 'a value is required'));
+      opts.appendChild(flag('AUTO_INCREMENT', 'ai', 'the database numbers new rows itself'));
       opts.appendChild(flag('UNSIGNED', 'uns', 'no negative values'));
       opts.appendChild(flag('UNIQUE', 'uq', 'no duplicate values'));
+      pop.appendChild(opts);
+
+      const vals = el('div', 'dz-opts');
       const defIn = inp('dz-def', c.def, 'DEFAULT…', v => { c.def = v; });
       defIn.title = 'default value — number, text, TRUE/FALSE or NOW()';
-      opts.appendChild(defIn);
+      vals.appendChild(defIn);
       if (/^(DATE|DATETIME|TIMESTAMP|TIME)$/.test(c.type)) {
         const now = el('button', 'flag', '⏱ now');
         now.title = 'default to the current date/time';
         now.addEventListener('click', () => {
           c.def = c.type === 'DATE' ? 'CURDATE()' : c.type === 'TIME' ? 'CURTIME()' : 'NOW()';
           render();
-          scheduleCommit('default now');
         });
-        opts.appendChild(now);
+        vals.appendChild(now);
       }
       const minIn = inp('dz-range', c.chkMin, 'min…', v => { c.chkMin = v; });
       minIn.title = 'lowest allowed value (CHECK)';
       const maxIn = inp('dz-range', c.chkMax, 'max…', v => { c.chkMax = v; });
       maxIn.title = 'highest allowed value (CHECK)';
-      opts.appendChild(minIn);
-      opts.appendChild(maxIn);
+      vals.appendChild(minIn);
+      vals.appendChild(maxIn);
       if (String(c.rawCheck || '').trim()) {
         const rc = el('span', 'dz-fkinfo', 'CHECK (' + c.rawCheck + ')');
         rc.title = 'a rule this designer cannot edit — kept as-is';
-        opts.appendChild(rc);
+        vals.appendChild(rc);
       }
-      wrap.appendChild(opts);
+      pop.appendChild(vals);
 
       /* --- foreign key row --- */
       const fkRow = el('div', 'dz-fkrow');
@@ -534,7 +572,8 @@ export function mountTablesDesigner(host, schema, hooks) {
         fkRow.appendChild(el('span', 'dz-fklabel', 'on del'));
         fkRow.appendChild(onDel);
       }
-      wrap.appendChild(fkRow);
+      pop.appendChild(fkRow);
+      wrap.appendChild(pop);
     }
     return wrap;
   }

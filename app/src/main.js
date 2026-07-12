@@ -797,6 +797,16 @@ async function appendSchema(sql) {
   if (builder) builder.setSchema(cur);
 }
 
+/* the quiet signal that the builder re-read the schema (replaces the lite
+   tool's big toast, which the shim now hides) */
+function flashBuilderSync() {
+  const s = $('#builder-sync');
+  if (!s) return;
+  s.classList.add('show');
+  clearTimeout(flashBuilderSync._t);
+  flashBuilderSync._t = setTimeout(() => s.classList.remove('show'), 1400);
+}
+
 builder = mountBuilder($('#builder-host'), {
   runScript,
   appendData,
@@ -807,6 +817,10 @@ builder = mountBuilder($('#builder-host'), {
     if (project) builder.setSchema(tabById('schema') ? tabById('schema').content : '');
   }
 });
+{
+  const _setSchema = builder.setSchema.bind(builder);
+  builder.setSchema = text => { _setSchema(text); flashBuilderSync(); };
+}
 
 /* ================= splitters ================= */
 

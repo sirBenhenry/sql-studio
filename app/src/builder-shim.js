@@ -14,6 +14,10 @@ const HIDE_CSS = `
   .hero, footer, #tour, #tour-ring, #tour-backdrop, #tour-box,
   #schema-section, #lang-toggle, #tour-replay { display: none !important; }
 
+  /* the lite tool's toasts ("Database loaded — build away!" on every schema
+     re-feed) are website chrome — the IDE signals sync its own quiet way */
+  #toast { display: none !important; }
+
   /* the IDE owns SQL display (files + console): no posters, no copy,
      no practice lists, no long explainer hints */
   .sql-card, .practice { display: none !important; }

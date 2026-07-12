@@ -195,6 +195,13 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
+/* subtle "the builder re-read the schema" flash */
+#builder-sync {
+  font-weight: 400; letter-spacing: .02em; text-transform: none;
+  opacity: 0; transition: opacity .3s;
+  margin-right: auto;
+}
+#builder-sync.show { opacity: 1; }
 
 /* ================= file tabs + editor ================= */
 .file-tabs {
@@ -413,17 +420,41 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
   font-family: var(--mono); font-size: .74rem; padding: 4px 6px; outline: none;
 }
 .dz-args:focus, .dz-col select:focus { border-color: var(--accent); }
-.dz-col .flag {
+.dz-card .flag {
   border: 1px solid var(--line); background: none; color: var(--muted);
   font-family: inherit; font-size: .58rem; font-weight: 700; letter-spacing: .05em;
   padding: 3px 6px; cursor: pointer; text-transform: uppercase;
 }
-.dz-col .flag:hover { border-color: var(--ink); color: var(--ink); }
-.dz-col .flag.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.dz-card .flag:hover { border-color: var(--ink); color: var(--ink); }
+.dz-card .flag.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .dz-card .btn.small { margin-top: 10px; }
-.dz-colwrap { border-bottom: 1px solid var(--line); }
+.dz-colwrap { border-bottom: 1px solid var(--line); position: relative; }
 .dz-colwrap .dz-col { border-bottom: 0; }
-.dz-more { font-weight: 400 !important; }
+.dz-more { font-weight: 400 !important; white-space: nowrap; }
+
+/* written-out property tags on the column row */
+.dz-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+.dz-tag {
+  font-size: .58rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); border: 1px solid var(--line); padding: 2px 5px; white-space: nowrap;
+}
+
+/* the properties popup (click ✕ or anywhere outside to close & apply) */
+.dz-popback { position: fixed; inset: 0; z-index: 60; background: transparent; }
+.dz-pop {
+  position: absolute; left: 0; right: 0; top: calc(100% - 3px); z-index: 61;
+  background: var(--bg); border: 1px solid var(--rule);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--ink) 22%, transparent);
+  padding: 8px 12px 10px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.dz-pop-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: .6rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 4px;
+}
+.dz-pop .dz-opts { padding-left: 0; }
+.dz-pop .dz-fkrow { padding-left: 0; padding-bottom: 2px; }
 .dz-opts {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   padding: 2px 0 7px 8px;

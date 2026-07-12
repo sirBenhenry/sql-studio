@@ -311,12 +311,28 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
 
   // uncheck UNIQUE → the index really drops
   ran5.length = 0;
+  openOpts('code');
   const codeWrap = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === 'code');
   const uqFlag = [...codeWrap.querySelectorAll('button')].find(b => b.textContent === 'UNIQUE');
   uqFlag.click();
+  host5.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true })); // apply on click-away
   await tick(400);
   ck('unique off: DROP INDEX emitted', ran5.some(s => s.includes('DROP INDEX `code`')), JSON.stringify(ran5));
   ck('unique off: MODIFY without UNIQUE', ran5.some(s => s.includes('MODIFY `code` VARCHAR(10) NOT NULL') && !s.includes('UNIQUE')), JSON.stringify(ran5));
+
+  // the reported bug: a commit must NOT slam the properties popup shut
+  {
+    const codeWrap2 = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === 'code');
+    ck('popup survives the commit', !!codeWrap2.querySelector('.dz-pop'));
+    // …and clicking outside (the backdrop) closes it
+    codeWrap2.querySelector('.dz-popback').click();
+    await tick(50);
+    const codeWrap3 = [...host5.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname').value === 'code');
+    ck('backdrop click closes the popup', !codeWrap3.querySelector('.dz-pop'));
+    ck('row shows written-out property tags', [...codeWrap3.querySelectorAll('.dz-tag')].some(t => t.textContent === 'NOT NULL'),
+      [...codeWrap3.querySelectorAll('.dz-tag')].map(t => t.textContent).join(','));
+    await tick(400); // let the close-scheduled commit settle before the next section
+  }
 
   // remove the (self-referencing) FK → constraint name looked up and dropped
   ran5.length = 0;
@@ -348,7 +364,7 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   // PK on a new column of an existing table (which already has a PK):
   // flag hidden — and for a PK-less table the ADD PRIMARY KEY is emitted
   ck('PK flag hidden when the table already has a PK',
-    ![...pWrap2.querySelectorAll('button')].some(b => b.textContent === 'PK'),
+    ![...pWrap2.querySelectorAll('button')].some(b => b.textContent === 'PRIMARY KEY'),
     [...pWrap2.querySelectorAll('button')].map(b => b.textContent).join(','));
 }
 
@@ -371,9 +387,10 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   w6.querySelector('.dz-more').click();
   await tick(50);
   const w6b = [...host6.querySelectorAll('.dz-colwrap')].find(x => x.querySelector('.dz-cname') && x.querySelector('.dz-cname').value === 'id');
-  const pkFlag = [...w6b.querySelectorAll('button')].find(b => b.textContent === 'PK');
+  const pkFlag = [...w6b.querySelectorAll('button')].find(b => b.textContent === 'PRIMARY KEY');
   ck('PK flag offered on PK-less table', !!pkFlag);
   pkFlag.click();
+  host6.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true })); // apply on click-away
   await tick(400);
   ck('new col PK → ADD then ADD PRIMARY KEY',
     ran6.some(s => s.includes('ADD `id`') && s.includes('ADD PRIMARY KEY(`id`)')), JSON.stringify(ran6));
