@@ -18,7 +18,7 @@ vm.createContext(sb);
 vm.runInContext(readFileSync(join(here, '..', 'src', 'core', 'parser.js'), 'utf8'), sb);
 const parseSchema = sb.window.parseSchema;
 
-const { mountTablesDesigner } = await import('../src/tables-designer.js');
+const { mountTablesDesigner, createTableDDL } = await import('../src/tables-designer.js');
 
 let fail = 0;
 const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
@@ -162,6 +162,58 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
     JSON.stringify(ran.map(r => r.sql)));
   ck('FK column type synced to target', ran.some(r => r.sql.includes('MODIFY `fk_category_id` INT UNSIGNED NOT NULL')) ||
     ran.some(r => r.sql.includes('CHANGE') && r.sql.includes('INT UNSIGNED')) || true); // type sync happens pre-commit in model
+}
+
+// ---- round-trip: DEFAULT / UNIQUE / CHECK / cascades / KEY lines survive ----
+{
+  const schema2 = parseSchema(
+    'CREATE TABLE cat (id INT UNSIGNED NOT NULL AUTO_INCREMENT, code VARCHAR(10) NOT NULL UNIQUE, PRIMARY KEY(id));\n' +
+    'CREATE TABLE prod (\n' +
+    ' id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n' +
+    " label VARCHAR(50) NOT NULL DEFAULT 'new',\n" +
+    ' stock INT NOT NULL DEFAULT 0 CHECK (`stock` BETWEEN 0 AND 999),\n' +
+    " note VARCHAR(90) CHECK (note <> 'x'),\n" +
+    ' cat_id INT UNSIGNED NOT NULL,\n' +
+    ' PRIMARY KEY(id),\n' +
+    ' KEY idx_label (`label`),\n' +
+    ' FOREIGN KEY(cat_id) REFERENCES cat(id) ON UPDATE CASCADE ON DELETE SET NULL\n' +
+    ');');
+
+  const ran2 = [];
+  let lastModel = null;
+  const host2 = document.createElement('div');
+  document.body.appendChild(host2);
+  mountTablesDesigner(host2, schema2, {
+    runScript: async sql => { ran2.push(sql); return true; },
+    writeSchema: async model => { lastModel = model; },
+    openTable: () => {}, reload: () => {}, toast: () => {}
+  });
+
+  // rename `label` → `title`, blur → the CHANGE must carry the DEFAULT along
+  const labelIn = [...host2.querySelectorAll('.dz-cname')].find(i => i.value === 'label');
+  labelIn.value = 'title';
+  labelIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  host2.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('rename keeps DEFAULT in CHANGE',
+    ran2.some(s => s.includes("CHANGE `label` `title` VARCHAR(50) NOT NULL DEFAULT 'new'")),
+    JSON.stringify(ran2));
+
+  const prodDDL = createTableDDL(lastModel.find(t => t.origName === 'prod'));
+  const catDDL = createTableDDL(lastModel.find(t => t.origName === 'cat'));
+  ck('regenerated: UNIQUE survives', catDDL.includes('`code` VARCHAR(10) NOT NULL UNIQUE'), catDDL);
+  ck('regenerated: DEFAULT survives', prodDDL.includes("DEFAULT 'new'"), prodDDL);
+  ck('regenerated: min/max CHECK survives', prodDDL.includes('CHECK (`stock` BETWEEN 0 AND 999)'), prodDDL);
+  ck('regenerated: foreign CHECK kept verbatim', prodDDL.includes("CHECK (note <> 'x')"), prodDDL);
+  ck('regenerated: KEY line follows the rename', prodDDL.includes('KEY idx_label (`title`)'), prodDDL);
+  ck('regenerated: FK cascades survive',
+    prodDDL.includes('REFERENCES `cat`(`id`) ON UPDATE CASCADE ON DELETE SET NULL'), prodDDL);
+
+  // no-op safety must still hold with the new fields in play
+  ran2.length = 0;
+  host2.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('round-trip model is diff-stable (no phantom MODIFYs)', ran2.length === 0, JSON.stringify(ran2));
 }
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');

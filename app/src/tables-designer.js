@@ -27,6 +27,13 @@ function cleanIdent(s, fallback) {
   return c || fallback;
 }
 
+/** parsed DEFAULT / CHECK bound → what the input fields display */
+function displayLit(v) {
+  v = String(v || '').trim();
+  const m = v.match(/^'([\s\S]*)'$/);
+  return m ? m[1].replace(/''/g, "'") : v;
+}
+
 /** designer model from the shared parser model */
 function modelFromSchema(schema) {
   return (schema.tables || []).map(t => ({
@@ -34,12 +41,29 @@ function modelFromSchema(schema) {
     origName: t.name,
     fks: t.fks.map(fk => ({ ...fk })),
     origFkCols: t.fks.map(fk => fk.col),
+    extras: (t.extras || []).slice(),
     cols: t.columns.map(c => {
       const st = splitType(c.type);
+      // a parsed column CHECK in the designer's own shape becomes min/max;
+      // anything else is carried verbatim so it never silently disappears
+      let chkMin = '', chkMax = '', rawCheck = '';
+      const chk = String(c.check || '').trim();
+      if (chk) {
+        let m;
+        if ((m = chk.match(/^`?([\w$]+)`?\s+BETWEEN\s+(\S+)\s+AND\s+(\S+)$/i)) && m[1] === c.name) {
+          chkMin = displayLit(m[2]); chkMax = displayLit(m[3]);
+        } else if ((m = chk.match(/^`?([\w$]+)`?\s*>=\s*(\S+)$/i)) && m[1] === c.name) {
+          chkMin = displayLit(m[2]);
+        } else if ((m = chk.match(/^`?([\w$]+)`?\s*<=\s*(\S+)$/i)) && m[1] === c.name) {
+          chkMax = displayLit(m[2]);
+        } else {
+          rawCheck = chk;
+        }
+      }
       const col = {
         name: c.name, type: st.type, args: st.args,
         uns: !!c.unsigned, nn: !!c.notNull, ai: !!c.autoInc, pk: !!c.pk,
-        uq: false, def: '', chkMin: '', chkMax: ''
+        uq: !!c.unique, def: displayLit(c.dflt), chkMin, chkMax, rawCheck
       };
       col.orig = { ...col };
       return col;
@@ -52,11 +76,13 @@ function sameCol(a, b) {
     !!a.uns === !!b.uns && !!a.nn === !!b.nn && !!a.ai === !!b.ai && !!a.uq === !!b.uq &&
     String(a.def || '') === String(b.def || '') &&
     String(a.chkMin || '') === String(b.chkMin || '') &&
-    String(a.chkMax || '') === String(b.chkMax || '');
+    String(a.chkMax || '') === String(b.chkMax || '') &&
+    String(a.rawCheck || '') === String(b.rawCheck || '');
 }
 
 function defaultLit(d) {
   d = String(d).trim();
+  if (/^\(.*\)$/.test(d)) return d; // parenthesized expression — as-is
   return /^(-?\d+(\.\d+)?|NOW\(\)|CURRENT_TIMESTAMP|CURDATE\(\)|CURTIME\(\)|TRUE|FALSE|NULL)$/i.test(d)
     ? d.toUpperCase()
     : "'" + d.replace(/'/g, "''") + "'";
@@ -76,7 +102,23 @@ export function colDDL(c) {
   if (hasMin && hasMax) s += ' CHECK (`' + name + '` BETWEEN ' + defaultLit(c.chkMin) + ' AND ' + defaultLit(c.chkMax) + ')';
   else if (hasMin) s += ' CHECK (`' + name + '` >= ' + defaultLit(c.chkMin) + ')';
   else if (hasMax) s += ' CHECK (`' + name + '` <= ' + defaultLit(c.chkMax) + ')';
+  else if (String(c.rawCheck || '').trim()) s += ' CHECK (' + String(c.rawCheck).trim() + ')';
   return s;
+}
+
+/** a kept-verbatim table-level line (KEY/INDEX/CHECK) is only re-emitted while
+ *  every backticked column it names still exists */
+function extraStillValid(extra, colNames) {
+  const par = extra.match(/\(([\s\S]*)\)/);
+  const src = par ? par[1] : extra;
+  const ids = [...src.matchAll(/`([\w$]+)`/g)].map(m => m[1]);
+  if (!ids.length && /^(UNIQUE|KEY|INDEX|FULLTEXT|SPATIAL)/i.test(extra.trim())) {
+    for (const p of src.split(',')) {
+      const id = p.trim().match(/^[\w$]+/);
+      if (id) ids.push(id[0]);
+    }
+  }
+  return ids.every(id => colNames.has(id));
 }
 
 function fkDDL(fk) {
@@ -90,6 +132,8 @@ export function createTableDDL(t) {
   const lines = t.cols.filter(c => String(c.name || '').trim()).map(c => ' ' + colDDL(c));
   const pks = t.cols.filter(c => c.pk && String(c.name || '').trim()).map(c => '`' + cleanIdent(c.name, 'col') + '`');
   if (pks.length) lines.push(' PRIMARY KEY(' + pks.join(', ') + ')');
+  const colSet = new Set(t.cols.filter(c => String(c.name || '').trim()).map(c => cleanIdent(c.name, 'col')));
+  for (const ex of t.extras || []) if (extraStillValid(ex, colSet)) lines.push(' ' + ex);
   for (const fk of t.fks || []) lines.push(' ' + fkDDL(fk));
   return 'CREATE TABLE `' + cleanIdent(t.name, 'table') + '` (\n' + lines.join(',\n') + '\n)';
 }
@@ -171,6 +215,20 @@ export function mountTablesDesigner(host, schema, hooks) {
     try {
       const ok = await hooks.runScript(stmts.join(';\n') + ';', 'designer: ' + reason, { journal: true });
       if (ok) {
+        // column renames: follow them inside kept-verbatim KEY/CHECK lines
+        // (MySQL does the same to its indexes on CHANGE)
+        for (const t of model) {
+          for (const c of t.cols) {
+            const from = c.orig && c.orig.name;
+            const to = cleanIdent(c.name, from || 'col');
+            if (from && from !== to && (t.extras || []).length) {
+              const esc = from.replace(/\$/g, '\\$');
+              t.extras = t.extras.map(ex => ex
+                .replace(new RegExp('`' + esc + '`', 'g'), '`' + to + '`')
+                .replace(new RegExp('\\b' + esc + '\\b', 'g'), to));
+            }
+          }
+        }
         await hooks.writeSchema(model);
         // refresh snapshots: everything on screen is now the committed truth
         for (const t of model) {
@@ -283,7 +341,7 @@ export function mountTablesDesigner(host, schema, hooks) {
     wrap.appendChild(row);
 
     /* --- options row (⋯): unsigned/unique/default/range --- */
-    const hasExtras = c.uns || c.uq || String(c.def || '') || String(c.chkMin || '') || String(c.chkMax || '') || existingFk;
+    const hasExtras = c.uns || c.uq || String(c.def || '') || String(c.chkMin || '') || String(c.chkMax || '') || String(c.rawCheck || '') || existingFk;
     if (c._open || hasExtras) {
       const opts = el('div', 'dz-opts');
       if (!c.orig) opts.appendChild(flag('PK', 'pk', 'primary key (new columns only)'));
@@ -308,6 +366,11 @@ export function mountTablesDesigner(host, schema, hooks) {
       maxIn.title = 'highest allowed value (CHECK)';
       opts.appendChild(minIn);
       opts.appendChild(maxIn);
+      if (String(c.rawCheck || '').trim()) {
+        const rc = el('span', 'dz-fkinfo', 'CHECK (' + c.rawCheck + ')');
+        rc.title = 'a rule this designer cannot edit — kept as-is';
+        opts.appendChild(rc);
+      }
       wrap.appendChild(opts);
 
       /* --- foreign key row --- */
@@ -399,7 +462,7 @@ export function mountTablesDesigner(host, schema, hooks) {
       await commit('new column');       // Ben's rule: adding a row commits the last one
       const live = model.find(x => x === t) || model.find(x => x.origName === t.origName);
       if (!live) return;
-      live.cols.push({ name: '', type: 'VARCHAR', args: '255', uns: false, nn: true, ai: false, pk: false, def: '', orig: null });
+      live.cols.push({ name: '', type: 'VARCHAR', args: '255', uns: false, nn: true, ai: false, pk: false, uq: false, def: '', chkMin: '', chkMax: '', rawCheck: '', orig: null });
       render();
       const cards = [...host.querySelectorAll('.dz-card')];
       const idx = model.indexOf(live);
@@ -423,8 +486,8 @@ export function mountTablesDesigner(host, schema, hooks) {
       cancelScheduled();
       await commit('new table');
       model.push({
-        name: '', origName: null, fks: [], origCols: [],
-        cols: [{ name: 'id', type: 'INT', args: '', uns: true, nn: true, ai: true, pk: true, def: '', orig: null }]
+        name: '', origName: null, fks: [], origCols: [], extras: [],
+        cols: [{ name: 'id', type: 'INT', args: '', uns: true, nn: true, ai: true, pk: true, uq: false, def: '', chkMin: '', chkMax: '', rawCheck: '', orig: null }]
       });
       render();
       const first = [...host.querySelectorAll('.dz-tname')].pop();

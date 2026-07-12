@@ -6,7 +6,10 @@
    parser.js — reads MySQL dumps (CREATE TABLE / ALTER TABLE)
    and produces a schema object:
    {
-     tables: [ { name, columns:[{name,type,numeric,pk,notNull,autoInc}], fks:[{col, refTable, refCol}] } ],
+     tables: [ { name,
+                 columns:[{name,type,numeric,pk,notNull,autoInc,unsigned,unique,dflt,check}],
+                 fks:[{col, refTable, refCol, onUpdate, onDelete}],
+                 extras:[raw table-level KEY/INDEX/CHECK definitions] } ],
      byName: { tableName -> table }
    }
    ============================================================ */
@@ -75,9 +78,27 @@
     return null;
   }
 
+  /* referential action (CASCADE / SET NULL / …) — ON UPDATE CURRENT_TIMESTAMP
+     deliberately doesn't match */
+  function refAction(def, kind) {
+    const m = def.match(new RegExp('ON\\s+' + kind + '\\s+(CASCADE|SET\\s+NULL|SET\\s+DEFAULT|RESTRICT|NO\\s+ACTION)', 'i'));
+    return m ? m[1].toUpperCase().replace(/\s+/g, ' ') : null;
+  }
+
   function parseColumnDef(def, table) {
     const m = def.match(/^[`"]?([\w$]+)[`"]?\s+([a-zA-Z]+(?:\s*\([^)]*\))?)/);
     if (!m) return;
+    // DEFAULT value: quoted string, (expression), or bare literal/function
+    const dm = def.match(/\bDEFAULT\s+('(?:[^']|'')*'|"(?:[^"]|"")*"|\([^)]*\)|[\w$]+(?:\s*\([^)]*\))?)/i);
+    let dflt = dm ? dm[1].trim() : '';
+    if (/^NULL$/i.test(dflt)) dflt = ''; // the implicit default — not worth carrying
+    // column-level CHECK (…) with balanced parens
+    let check = '';
+    const cm = /\bCHECK\s*\(/i.exec(def);
+    if (cm) {
+      const bal = readBalanced(def, cm.index + cm[0].length - 1);
+      if (bal) check = bal.body.trim();
+    }
     const col = {
       name: m[1],
       type: m[2].replace(/\s+/g, ''),
@@ -86,13 +107,17 @@
       unsigned: /\bUNSIGNED\b/i.test(def),
       pk: /PRIMARY\s+KEY/i.test(def),
       notNull: /NOT\s+NULL/i.test(def),
-      autoInc: /AUTO_INCREMENT/i.test(def)
+      autoInc: /AUTO_INCREMENT/i.test(def),
+      unique: /\bUNIQUE\b/i.test(def),
+      dflt,
+      check
     };
     table.columns.push(col);
     // inline foreign key:  col INT REFERENCES other(col)
     const ref = def.match(/REFERENCES\s+[`"]?(?:[\w$]+[`"]?\.[`"]?)?([\w$]+)[`"]?\s*\(([^)]+)\)/i);
     if (ref) {
-      table.fks.push({ col: col.name, refTable: unquote(ref[1]), refCol: unquote(ref[2].split(',')[0]) });
+      table.fks.push({ col: col.name, refTable: unquote(ref[1]), refCol: unquote(ref[2].split(',')[0]),
+        onUpdate: refAction(def, 'UPDATE'), onDelete: refAction(def, 'DELETE') });
     }
   }
 
@@ -102,7 +127,8 @@
       const cols = fk[1].split(',').map(unquote);
       const refCols = fk[3].split(',').map(unquote);
       // multi-column FKs: register the first pair (enough for join suggestions)
-      table.fks.push({ col: cols[0], refTable: unquote(fk[2]), refCol: refCols[0] });
+      table.fks.push({ col: cols[0], refTable: unquote(fk[2]), refCol: refCols[0],
+        onUpdate: refAction(def, 'UPDATE'), onDelete: refAction(def, 'DELETE') });
       return true;
     }
     const pk = def.match(/^PRIMARY\s+KEY\s*\(([^)]+)\)/i);
@@ -113,7 +139,32 @@
       });
       return true;
     }
-    return /^(UNIQUE|KEY|INDEX|FULLTEXT|SPATIAL|CHECK|CONSTRAINT)\b/i.test(def);
+    // "CONSTRAINT name …" — look at what follows the name
+    const bare = def.replace(/^CONSTRAINT\s+[`"]?[\w$]+[`"]?\s+/i, '');
+    // a single-column UNIQUE KEY is really a column property
+    const uq = bare.match(/^UNIQUE\s+(?:KEY|INDEX)?\s*[`"]?[\w$]*[`"]?\s*\(([^)]+)\)/i);
+    if (uq) {
+      const cols = uq[1].split(',').map(unquote);
+      if (cols.length === 1) {
+        const c = table.columns.find(x => x.name === cols[0]);
+        if (c) { c.unique = true; return true; }
+      }
+    }
+    // everything else (KEY/INDEX/table-level CHECK/multi-col UNIQUE) is kept
+    // verbatim so regenerating the CREATE doesn't silently lose it
+    if (/^(UNIQUE|KEY|INDEX|FULLTEXT|SPATIAL|CHECK|CONSTRAINT)\b/i.test(def)) {
+      table.extras.push(def.trim());
+      return true;
+    }
+    return false;
+  }
+
+  /* MODIFY/CHANGE replace the whole column definition (except key status) */
+  function copyColDef(ex, nc) {
+    ex.type = nc.type; ex.numeric = nc.numeric; ex.boolean = nc.boolean;
+    ex.unsigned = nc.unsigned; ex.notNull = nc.notNull; ex.autoInc = nc.autoInc;
+    ex.unique = ex.unique || nc.unique; // MODIFY without UNIQUE doesn't drop the index
+    ex.dflt = nc.dflt; ex.check = nc.check || ex.check;
   }
 
   /* apply one comma-separated ALTER clause to a parsed table (mutates it) */
@@ -123,7 +174,8 @@
     let mm;
     if (/^ADD\s+(CONSTRAINT\s+[`"\w$]+\s+)?FOREIGN\s+KEY/i.test(c)) {
       const fk = c.match(/FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+[`"]?(?:[\w$]+[`"]?\.[`"]?)?([\w$]+)[`"]?\s*\(([^)]+)\)/i);
-      if (fk) t.fks.push({ col: unquote(fk[1].split(',')[0]), refTable: unquote(fk[2]), refCol: unquote(fk[3].split(',')[0]) });
+      if (fk) t.fks.push({ col: unquote(fk[1].split(',')[0]), refTable: unquote(fk[2]), refCol: unquote(fk[3].split(',')[0]),
+        onUpdate: refAction(c, 'UPDATE'), onDelete: refAction(c, 'DELETE') });
       return;
     }
     if (/^ADD\s+PRIMARY\s+KEY/i.test(c)) {
@@ -131,7 +183,10 @@
       if (pk) pk[1].split(',').map(unquote).forEach(n => { const col = t.columns.find(x => x.name === n); if (col) col.pk = true; });
       return;
     }
-    if (/^ADD\s+(CONSTRAINT|UNIQUE|KEY|INDEX|FULLTEXT|SPATIAL|CHECK)\b/i.test(c)) return; // indexes: ignore
+    if (/^ADD\s+(CONSTRAINT|UNIQUE|KEY|INDEX|FULLTEXT|SPATIAL|CHECK)\b/i.test(c)) {
+      parseConstraintDef(c.replace(/^ADD\s+/i, ''), t); // col unique / kept verbatim
+      return;
+    }
     mm = c.match(/^ADD\s+(?:COLUMN\s+)?([\s\S]+)/i);
     if (mm) { parseColumnDef(mm[1], t); return; }
     if (/^DROP\s+PRIMARY\s+KEY/i.test(c)) { t.columns.forEach(col => col.pk = false); return; }
@@ -142,14 +197,14 @@
     if (mm) {
       const tmp = { columns: [], fks: [] }; parseColumnDef(mm[1], tmp);
       const nc = tmp.columns[0];
-      if (nc) { const ex = t.columns.find(x => x.name === nc.name); if (ex) { ex.type = nc.type; ex.numeric = nc.numeric; ex.boolean = nc.boolean; } }
+      if (nc) { const ex = t.columns.find(x => x.name === nc.name); if (ex) copyColDef(ex, nc); }
       return;
     }
     mm = c.match(/^CHANGE\s+(?:COLUMN\s+)?[`"]?([\w$]+)[`"]?\s+([\s\S]+)/i);
     if (mm) {
       const oldName = mm[1]; const tmp = { columns: [], fks: [] }; parseColumnDef(mm[2], tmp);
       const nc = tmp.columns[0]; const ex = t.columns.find(x => x.name === oldName);
-      if (ex && nc) { ex.name = nc.name; ex.type = nc.type; ex.numeric = nc.numeric; ex.boolean = nc.boolean; t.fks.forEach(fk => { if (fk.col === oldName) fk.col = nc.name; }); }
+      if (ex && nc) { ex.name = nc.name; copyColDef(ex, nc); t.fks.forEach(fk => { if (fk.col === oldName) fk.col = nc.name; }); }
       return;
     }
     mm = c.match(/^RENAME\s+COLUMN\s+[`"]?([\w$]+)[`"]?\s+TO\s+[`"]?([\w$]+)[`"]?/i);
@@ -172,7 +227,7 @@
       if (!bal) continue;
       createRe.lastIndex = bal.end + 1;
 
-      const table = { name, columns: [], fks: [] };
+      const table = { name, columns: [], fks: [], extras: [] };
       for (const def of splitTopLevel(bal.body)) {
         if (/^(PRIMARY|FOREIGN|UNIQUE|KEY|INDEX|FULLTEXT|SPATIAL|CHECK|CONSTRAINT)\b/i.test(def)) {
           parseConstraintDef(def, table);
