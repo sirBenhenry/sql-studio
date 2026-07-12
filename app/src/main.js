@@ -2,7 +2,7 @@
 // console, the embedded builder, and the sync pipeline glue.
 'use strict';
 
-import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry } from './sync.js';
+import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, buildDataSnapshot } from './sync.js';
 import { mountBuilder } from './builder-shim.js';
 import { mountGrid } from './grid.js';
 import { mountTablesDesigner, createTableDDL } from './tables-designer.js';
@@ -507,6 +507,45 @@ async function journal(source, statements) {
       if (activeTab === 'journal') setEditorText(t.content);
     }
   } catch (e) { logErr('journal write failed: ' + e); }
+  // every journaled change re-snapshots data.sql — files stay rebuildable
+  scheduleSnapshot();
+}
+
+/* ---- data snapshot: data.sql always mirrors the live data ---- */
+
+let snapshotTimer = null;
+function scheduleSnapshot() {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(() => {
+    snapshotData().catch(e => logErr('data snapshot failed: ' + e));
+  }, 800);
+}
+
+async function snapshotData() {
+  if (!engineRunning || !currentDb || !project) return;
+  const t = tabById('data');
+  if (!t) return;
+  const model = schemaModel();
+  let shown;
+  try { shown = await invoke('db_exec', { sql: 'SHOW TABLES', db: currentDb }); }
+  catch { return; }
+  const dumps = [];
+  for (const row of shown.rows) {
+    const name = row[0];
+    try {
+      const d = await invoke('db_exec', { sql: 'SELECT * FROM `' + name + '`', db: currentDb });
+      dumps.push({ name, columns: d.columns, rows: d.rows });
+    } catch { /* table vanished mid-snapshot — skip */ }
+  }
+  const text = buildDataSnapshot(model, dumps);
+  if (text === t.content) return;
+  t.content = text;
+  try {
+    await invoke('file_write', { rel: 'data.sql', content: text });
+    t.savedContent = text;
+    if (activeTab === 'data') setEditorText(text);
+    renderTabs();
+  } catch (e) { logErr('data.sql write failed: ' + e); }
 }
 
 async function startEngine(root) {
@@ -660,19 +699,10 @@ $('#console-input').addEventListener('keydown', e => {
 
 /* ================= builder mount + sync hooks ================= */
 
-async function appendData(sql) {
-  const t = tabById('data');
-  if (!t) return;
-  let cur = t.content;
-  if (!cur.endsWith('\n')) cur += '\n';
-  cur += sql.trim() + '\n';
-  t.content = cur;
-  try {
-    await invoke('file_write', { rel: 'data.sql', content: cur });
-    t.savedContent = cur;
-    if (activeTab === 'data') setEditorText(cur);
-    renderTabs();
-  } catch (e) { logErr('data.sql write failed: ' + e); }
+/* builder INSERTs used to append here one by one; data.sql is now a full
+   snapshot of the live data, so any applied insert just re-snapshots */
+async function appendData() {
+  scheduleSnapshot();
 }
 
 /** the builder applied schema statements (CREATE/ALTER): append them to

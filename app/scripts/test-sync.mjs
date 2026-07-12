@@ -1,5 +1,5 @@
 // Unit tests for the sync plumbing (splitSQL / findCurrentDb / helpers).
-import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry } from '../src/sync.js';
+import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, snapshotTableOrder, buildDataSnapshot } from '../src/sync.js';
 
 let fail = 0;
 const ck = (name, cond, extra) => {
@@ -64,6 +64,32 @@ ck('SELECT is not', !isDbAgnostic('SELECT * FROM t'));
 // --- journalEntry ---
 const je = journalEntry('builder: alter', ['ALTER TABLE a ADD b INT']);
 ck('journal has @applied stamp', /^\n-- @applied \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \(builder: alter\)\nALTER TABLE a ADD b INT;\n$/.test(je), JSON.stringify(je));
+
+// --- data snapshot ---
+const model = {
+  tables: [
+    { name: 'task', fks: [{ col: 'person_id', refTable: 'person', refCol: 'id' }],
+      columns: [{ name: 'id', numeric: true }, { name: 'person_id', numeric: true }, { name: 'title', numeric: false }] },
+    { name: 'person', fks: [],
+      columns: [{ name: 'id', numeric: true }, { name: 'name', numeric: false }] }
+  ],
+  byName: {}
+};
+for (const t of model.tables) model.byName[t.name] = t;
+
+eq('snapshot order: referenced table first',
+  snapshotTableOrder(model), ['person', 'task']);
+
+const snap = buildDataSnapshot(model, [
+  { name: 'task', columns: ['id', 'person_id', 'title'], rows: [['1', '2', "it's; done"], ['2', null, 'C:\\tmp']] },
+  { name: 'person', columns: ['id', 'name'], rows: [['2', 'Ben']] },
+  { name: 'empty_one', columns: ['id'], rows: [] }
+]);
+ck('snapshot dumps person before task', snap.indexOf('INSERT INTO `person`') < snap.indexOf('INSERT INTO `task`'), snap);
+ck('snapshot: numeric cols unquoted', snap.includes("(1, 2, 'it''s; done')"), snap);
+ck('snapshot: NULL and backslash escaping', snap.includes("(2, NULL, 'C:\\\\tmp')"), snap);
+ck('snapshot: empty tables omitted', !snap.includes('empty_one'), snap);
+ck('snapshot: replayable by splitSQL', splitSQL(snap).length === 2, JSON.stringify(splitSQL(snap)));
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);

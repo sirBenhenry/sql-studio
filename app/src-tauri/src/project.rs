@@ -27,7 +27,7 @@ pub struct Project {
 }
 
 const SCHEMA_TEMPLATE: &str = "-- schema.sql — the database definition. SQL Studio edits this file in\n-- place as you work in the builder; you can also type here directly.\n\n";
-const DATA_TEMPLATE: &str = "-- data.sql — seed rows. INSERTs made in the builder land here so the\n-- project can be rebuilt from scratch.\n\n";
+const DATA_TEMPLATE: &str = "-- data.sql — the project's data. SQL Studio snapshots the live data here\n-- after every applied change, so the project can rebuild from its files.\n\n";
 const JOURNAL_TEMPLATE: &str = "-- journal.sql — every change SQL Studio actually applied, in order.\n-- Replayable: run these against another server to reproduce the project's history.\n\n";
 
 fn read_or(path: &Path, fallback: &str) -> String {
