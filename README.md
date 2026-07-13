@@ -1,10 +1,24 @@
 # SQL Studio
 
-A visual, **Lego-style builder for MySQL** — click your query together and read the SQL. Runs **fully offline** as a single HTML file: no install, no server, no internet. Just open `sql-studio.html` in a browser.
+A visual, **Lego-style builder for MySQL**. Two ways to use it:
+
+1. **The IDE** (`app/`) — a Windows app where **a project folder IS a live database**: a bundled portable MySQL runs on your folder, and everything you do — designing tables, editing data in spreadsheets, building queries — applies to the database AND lands in plain files (`schema.sql`, `data.sql`, `journal.sql`, `queries/`) in the same breath. Copy the folder, and you've copied the database. Fully offline; nothing leaves your machine.
+2. **The lite tool** (`sql-studio.html`) — the original single HTML file. No install, no server: open it in a browser, paste a dump, click queries together.
 
 Built as a learning + productivity tool for writing MySQL by hand.
 
-## What it does
+## The IDE
+
+- **Live tables designer** — every table is an editable card; changes apply the moment you click away (drops ask first, Ctrl+Z/Ctrl+Y undo/redo). Properties like NOT NULL, defaults, allowed ranges and foreign keys are written out on each column — click a tag to remove it.
+- **Database canvas** — tables as cards, foreign keys as real lines; drag to arrange, pan, zoom.
+- **Spreadsheet grids** — double-click to edit (click-away commits), sort by header, foreign-key fields search the referenced table as you type.
+- **The builder** — the lite tool's query builder, embedded: SELECT/INSERT/UPDATE/DELETE as clickable sentences (Natural ↔ SQL switch), run against the live database, save keepers to query files.
+- **Everything synced** — edit `schema.sql` by hand and Ctrl+S applies the diff to the database (confirmed); every applied change is journaled; `data.sql` is a live snapshot, so any copy of the folder rebuilds the identical database.
+- **Import** a `.sql` dump from Settings; friendly plain-language hints under MySQL errors; an onboarding tour that walks the whole workflow.
+
+Build it: `cd app && npm i && node scripts/fetch-engine.mjs && npx tauri build` (see `app/SETUP.md`). Windows only for now.
+
+## The lite tool: what it does
 
 - **SELECT** — build a query as a sentence you click together (columns, conditions, joins, group by, having, sorting, limit, subqueries). Hover any piece to see the matching SQL light up.
 - **INSERT / UPDATE / DELETE** — pick a table and build the statement visually, with safety warnings (e.g. a `DELETE` with no condition).

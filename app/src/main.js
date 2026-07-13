@@ -305,6 +305,8 @@ function activateTab(id) {
     editorHl.style.display = '';
     setEditorText(t.content);
     editor.readOnly = !!t.readonly;
+    // the journal's newest entries live at the bottom — start there
+    if (t.id === 'journal') { editor.scrollTop = editor.scrollHeight; syncHlScroll(); }
   }
   renderTabs();
 }
