@@ -114,6 +114,26 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
     diff, tested in JS, and MySQL's exact spellings PINNED in the cargo test
     so an engine upgrade fails loudly instead of silently breaking the diff.
 
+## Round 5 — resilience + safety (second solo stretch)
+
+21. **data.sql replay hardened** — snapshot wraps inserts in
+    `SET FOREIGN_KEY_CHECKS = 0/1` (safe now that seeds replay on ONE
+    connection via batch): a self-reference to a higher id (Anna invited by
+    Carla) or an FK cycle rebuilds. Validated on the real engine, including
+    that the checks actually re-enable afterwards.
+22. **Engine-loss handling** — connection-class errors flip the status to
+    "● engine: lost — click to restart" (all three exec paths report it);
+    clicking restarts without an app restart; re-entry guarded; Ctrl+S with
+    a dead engine says loudly that only the FILE was updated.
+23. **Window title** = project name; dead recents prune themselves off the
+    welcome screen; grid FK dropdown gets ↓/↑ + Enter keyboard nav
+    (capture-phase so Enter picks instead of committing).
+24. **THE CATCH: unfiltered UPDATE/DELETE gate.** The lite tool's "deletes
+    EVERY row" warning is a comment — which the shim strips — so the IDE
+    applied condition-less UPDATE/DELETE with zero friction. Apply now
+    confirms, tested both ways. Plus errno 1046 hint (import without USE).
+    Clippy: clean.
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much
