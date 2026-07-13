@@ -482,6 +482,14 @@ mod tests {
         conn.query_drop("ALTER TABLE `nopk` ADD `id` INT UNSIGNED NOT NULL").unwrap();
         conn.query_drop("ALTER TABLE `nopk` ADD PRIMARY KEY(`id`)").unwrap();
 
+        // --- self-referential FK-by-name: reading the INSERT's own target
+        // table needs the derived-table wrap (bare subquery = error 1093) ---
+        conn.query_drop(
+            "INSERT INTO u (code, qty, ref_id) VALUES ('self', 1, \
+             (SELECT id FROM (SELECT id FROM u WHERE id = 1) AS `_lookup`))",
+        )
+        .unwrap();
+
         // --- date/time defaults, exactly as the designer emits them:
         // CURRENT_TIMESTAMP bare; CURDATE/CURTIME as (expression) defaults ---
         conn.query_drop(

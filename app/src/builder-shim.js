@@ -84,6 +84,16 @@ const HIDE_CSS = `
   }
   .ide-sug-item { padding: 5px 10px; cursor: pointer; white-space: nowrap; }
   .ide-sug-item:hover, .ide-sug-item.active { background: var(--ink); color: var(--bg); }
+
+  /* the short "already applied" history above the fresh insert row */
+  #ide-applied:not(:empty) { margin: 6px 0 4px; }
+  .ide-applied-line {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: .64rem; color: var(--muted);
+    padding: 2px 0; border-bottom: 1px dashed var(--line);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ide-applied-line:first-child { color: var(--ink); }
 `;
 
 /* forced-theme overrides for the lite tool (it only knows the OS media
@@ -131,6 +141,29 @@ export function wireBuilder(d, win, hooks) {
 
   /* ---- semi-live INSERT: rows apply as you go ---- */
 
+  /* applied rows stay visible as a short history above the fresh row —
+     otherwise "apply + clear" reads as the inputs just vanishing */
+  const appliedBox = d.createElement('div');
+  appliedBox.id = 'ide-applied';
+  const insRows = d.querySelector('#insert-rows');
+  if (insRows && insRows.parentNode) insRows.parentNode.insertBefore(appliedBox, insRows);
+  function noteApplied(sql) {
+    const line = d.createElement('div');
+    line.className = 'ide-applied-line';
+    const flat = sql.replace(/\s+/g, ' ');
+    line.textContent = '✓ applied  ' + (flat.length > 110 ? flat.slice(0, 110) + '…' : flat);
+    appliedBox.insertBefore(line, appliedBox.firstChild);
+    while (appliedBox.children.length > 4) appliedBox.removeChild(appliedBox.lastChild);
+  }
+
+  /** an insert row counts as "built" only when something was typed or looked
+   *  up — the generator emits all-DEFAULT SQL even for untouched rows, and
+   *  that must never auto-apply */
+  function insertRowsFilled() {
+    return [...d.querySelectorAll('#insert-rows .set-row')].some(row =>
+      [...row.querySelectorAll('input')].some(i => i.value) || row.querySelector('.chip'));
+  }
+
   /** collapse the insert builder back to one clean empty row (the lite tool
    *  resets to a fresh row when the last one is removed) */
   function clearInsertRows() {
@@ -164,6 +197,7 @@ export function wireBuilder(d, win, hooks) {
         const ok = await hooks.runScript(sql, 'builder: insert', { journal: true });
         if (ok) {
           if (hooks.appendData) hooks.appendData(sql);
+          noteApplied(sql);
           clearInsertRows(); // applied rows must not apply twice
         }
         return ok;
@@ -214,6 +248,12 @@ export function wireBuilder(d, win, hooks) {
     const sql = currentSQL();
     peek.textContent = sql.replace(/\s+/g, ' ');
     actBtn.disabled = !splitSQL(sql).length;
+    // the add-row button says what it will actually do
+    if (addRowBtn) {
+      addRowBtn.textContent = (currentMode() === 'insert' && splitSQL(sql).length && insertRowsFilled())
+        ? '✓ apply + next row'
+        : addRowOrig;
+    }
   }
 
   actBtn.addEventListener('click', async () => {
@@ -230,19 +270,21 @@ export function wireBuilder(d, win, hooks) {
     const btn = e.target && e.target.closest && e.target.closest('#btn-add-insert-row');
     if (!btn || currentMode() !== 'insert') return;
     const sql = currentSQL();
-    if (!splitSQL(sql).length) return; // nothing built yet — plain add
+    if (!splitSQL(sql).length || !insertRowsFilled()) return; // nothing built yet — plain add
     e.stopPropagation();
     e.preventDefault();
     (async () => {
       const ok = await hooks.runScript(sql, 'builder: insert', { journal: true });
       if (ok) {
         if (hooks.appendData) hooks.appendData(sql);
+        noteApplied(sql);
         clearInsertRows(); // leaves one fresh empty row — that IS the new row
       }
       refreshBar();
     })();
   }, true);
   const addRowBtn = d.querySelector('#btn-add-insert-row');
+  const addRowOrig = addRowBtn ? addRowBtn.textContent : '';
   if (addRowBtn) addRowBtn.title = 'applies this row to the database, then starts the next';
 
   // keep the bar current: mode switches + any change inside the builder

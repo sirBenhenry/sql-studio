@@ -2250,7 +2250,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         push(' ', '', p);
         if (w.not) { push('NOT', 'k', p); push(' ', '', p); }
         push('IN', 'k', p); push(' ', '', p);
-        pushLookup(push, w.lookup, schema, p);
+        pushLookup(push, w.lookup, schema, p, table);
       } else if (w.sub) {
         // col <op> (SELECT AVG(col) FROM table …) — scalar comparison
         const op = OPS[w.op] && OPS[w.op].sql ? OPS[w.op] : OPS.eq;
@@ -2264,11 +2264,22 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
   /* FK-by-name lookup → (SELECT ret FROM table WHERE col = val [AND …]).
      lk = { table, ret, matches:[{col,val}] }. Used for INSERT values and
-     conditions so you can reference a row by a human column, not its id. */
-  function pushLookup(push, lk, schema, p) {
+     conditions so you can reference a row by a human column, not its id.
+     targetTable: the table the surrounding INSERT/UPDATE/DELETE modifies —
+     MySQL (error 1093) forbids reading it in a subquery, so a lookup into
+     the same table is wrapped in a derived table, which materializes it. */
+  function pushLookup(push, lk, schema, p, targetTable) {
+    const ret = lk.ret || 'id';
+    const clash = !!targetTable && lk.table === targetTable;
     push('(', '', p); push('SELECT', 'k', p); push(' ', '', p);
-    push(lk.ret || 'id', 'i', p); push(' ', '', p);
-    push('FROM', 'k', p); push(' ', '', p); push(lk.table, 'i', p);
+    push(ret, 'i', p); push(' ', '', p);
+    push('FROM', 'k', p); push(' ', '', p);
+    if (clash) {
+      push('(', '', p); push('SELECT', 'k', p); push(' ', '', p);
+      push(ret, 'i', p); push(' ', '', p);
+      push('FROM', 'k', p); push(' ', '', p);
+    }
+    push(lk.table, 'i', p);
     const ms = (lk.matches || []).filter(m => m && m.col && String(m.val ?? '').trim() !== '');
     if (ms.length) {
       push(' ', '', p); push('WHERE', 'k', p);
@@ -2277,6 +2288,10 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         push(' ', '', p); push(m.col, 'i', p); push(' = ', 'k', p);
         pushLiteral(push, m.val, colInfoOf(schema, lk.table, m.col), p);
       });
+    }
+    if (clash) {
+      push(')', '', p); push(' ', '', p);
+      push('AS', 'k', p); push(' ', '', p); push('_lookup', 'i', p);
     }
     push(')', '', p);
   }
@@ -2316,7 +2331,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       cols.forEach((c, ci) => {
         if (ci) push(', ', '', p);
         const raw = r ? r[c] : '';
-        if (raw && typeof raw === 'object' && raw.lookup) pushLookup(push, raw.lookup, schema, p);
+        if (raw && typeof raw === 'object' && raw.lookup) pushLookup(push, raw.lookup, schema, p, I.table);
         else if (raw == null || String(raw).trim() === '') push('DEFAULT', 'k', p);
         else pushLiteral(push, raw, colInfoOf(schema, I.table, c), p);
       });

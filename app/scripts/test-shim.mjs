@@ -106,6 +106,25 @@ d.querySelector('#tab-insert').click();
   ck('+ row leaves one fresh empty row',
     rows.length === 1 && [...rows[0].querySelectorAll('input')].every(i => !i.value),
     rows.length);
+  ck('applied row stays visible as history',
+    [...d.querySelectorAll('.ide-applied-line')].some(l => l.textContent.includes("'Anna'")),
+    d.querySelector('#ide-applied') && d.querySelector('#ide-applied').textContent);
+}
+
+// ---- the add-row button says what it will do ----
+{
+  const btn = d.querySelector('#btn-add-insert-row');
+  const empty = btn.textContent;
+  ck('empty row: original label', !empty.includes('apply'), empty);
+  const nameInp = [...d.querySelectorAll('#insert-rows .set-row input')].find(i => i.title === 'name');
+  nameInp.value = 'Carla';
+  nameInp.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(20);
+  ck('built row: label announces apply + next', btn.textContent === '✓ apply + next row', btn.textContent);
+  // clean up for the following tests
+  nameInp.value = '';
+  nameInp.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(20);
 }
 
 // ---- bottom-bar Apply also resets the rows (no double-insert) ----

@@ -58,5 +58,29 @@ ck('correlated subquery generates',
 ck('DELETE generator',
   T(G.generateDeleteSegments({ table: 'loan', where: [{ col: 'id', op: 'eq', v1: '5' }] }, S)) === 'DELETE FROM loan\nWHERE id = 5;');
 
+// FK-by-name into ANOTHER table: stays a plain scalar subquery
+const insOther = T(G.generateInsertSegments({
+  table: 'loan', cols: ['book_id'],
+  rows: [{ book_id: { lookup: { table: 'book', ret: 'id', matches: [{ col: 'title', val: 'Dune' }] } } }]
+}, S));
+ck('lookup into another table stays a plain subquery',
+  insOther.includes("(SELECT id FROM book WHERE title = 'Dune')"), insOther);
+
+// FK-by-name into the SAME table: derived-table wrap (MySQL error 1093)
+const insSelf = T(G.generateInsertSegments({
+  table: 'member', cols: ['name', 'invited_by'],
+  rows: [{ name: 'Ben', invited_by: { lookup: { table: 'member', ret: 'id', matches: [{ col: 'name', val: 'Anna' }] } } }]
+}, S));
+ck('self-table lookup wrapped against error 1093',
+  insSelf.includes("(SELECT id FROM (SELECT id FROM member WHERE name = 'Anna') AS _lookup)"), insSelf);
+
+// same rule for UPDATE/DELETE WHERE lookups
+const updSelf = T(G.generateUpdateSegments({
+  table: 'member', sets: [{ col: 'name', mode: 'value', value: 'Benny' }],
+  where: [{ col: 'invited_by', lookup: { table: 'member', ret: 'id', matches: [{ col: 'name', val: 'Anna' }] } }]
+}, S));
+ck('UPDATE self-lookup wrapped too',
+  updSelf.includes('FROM (SELECT id FROM member WHERE') && updSelf.includes('AS _lookup'), updSelf);
+
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);
