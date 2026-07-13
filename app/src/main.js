@@ -447,7 +447,31 @@ async function renderViewTab(t, host) {
       },
       journal: (source, stmts) => journal(source, stmts),
       shouldConfirm: () => SETTINGS.confirmDelete,
-      rowLimit: () => SETTINGS.rowLimit
+      rowLimit: () => SETTINGS.rowLimit,
+      /* FK search in the grid: match the referenced table's human columns
+         (or the key itself when a number is typed), label rows readably */
+      async lookupFkRows(refTable, refCol, q) {
+        if (!engineRunning || !currentDb) return [];
+        const def = schemaModel().byName[refTable];
+        if (!def) return [];
+        const human = def.columns.filter(c => !c.pk && !c.numeric).slice(0, 2).map(c => c.name);
+        const like = String(q).replace(/([\\%_])/g, '\\$1').replace(/'/g, "''");
+        const conds = human.map(c => '`' + c + "` LIKE '%" + like + "%'");
+        if (/^\d+$/.test(String(q).trim())) conds.push('`' + refCol + '` = ' + String(q).trim());
+        if (!conds.length) return [];
+        const cols = ['`' + refCol + '`'].concat(human.map(c => '`' + c + '`'));
+        try {
+          const res = await invoke('db_exec', {
+            sql: 'SELECT ' + cols.join(', ') + ' FROM `' + refTable + '` WHERE ' +
+              conds.join(' OR ') + ' LIMIT 8',
+            db: currentDb
+          });
+          return res.rows.map(r => ({
+            id: r[0],
+            label: r[0] + ' · ' + r.slice(1).filter(v => v != null).join(' · ')
+          }));
+        } catch { return []; }
+      }
     });
   }
 }

@@ -507,6 +507,16 @@ body.split-drag { user-select: none; }
 .grid-scroll { overflow-y: auto; overflow-x: hidden; padding: 12px 14px; }
 .grid-scroll .result-table { width: 100%; table-layout: auto; }
 .grid-table td { user-select: text; }
+/* FK search dropdown in the grid */
+.grid-suggest {
+  position: fixed; z-index: 80;
+  background: var(--bg); border: 1px solid var(--rule);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--ink) 22%, transparent);
+  max-height: 180px; overflow-y: auto; overflow-x: hidden;
+  font-size: .76rem; font-family: var(--mono);
+}
+.grid-sug-item { padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+.grid-sug-item:hover { background: var(--ink); color: var(--bg); }
 .grid-table th.pk { color: var(--accent); }
 .grid-table .row-del { border: 0 !important; }
 .cell-edit {

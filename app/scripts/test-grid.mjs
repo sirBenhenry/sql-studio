@@ -13,7 +13,7 @@ const { renderOverview } = await import('../src/overview.js');
 
 let fail = 0;
 const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
-const tick = () => new Promise(r => setTimeout(r, 0));
+const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
 // fake sandbox: one table, three rows
 const executed = [];
@@ -114,6 +114,36 @@ delBtn.click();
 await tick(); await tick();
 const del = executed.find(s => s.startsWith('DELETE'));
 ck('DELETE addressed by PK', del === 'DELETE FROM `item` WHERE `id` = 1 LIMIT 1', del);
+
+// --- FK column search: type a name, pick a row, the id fills in ---
+{
+  const lookups = [];
+  const hostFk = document.createElement('div');
+  document.body.appendChild(hostFk);
+  mountGrid(hostFk, {
+    name: 'task',
+    columns: [{ name: 'id', pk: true, autoInc: true, numeric: true }, { name: 'person_id', numeric: true }],
+    fks: [{ col: 'person_id', refTable: 'person', refCol: 'id' }]
+  }, {
+    exec: async () => ({ columns: ['id', 'person_id'], rows: [], affected: 0, elapsed_ms: 0 }),
+    journal: () => {},
+    lookupFkRows: async (t, c, q) => { lookups.push({ t, c, q }); return [{ id: '2', label: '2 · Anna' }]; }
+  });
+  await tick(); await tick();
+  const fkInp = [...hostFk.querySelectorAll('tr.new-row input')][1];
+  ck('FK input announces its search', fkInp.placeholder.includes('search person'), fkInp.placeholder);
+  fkInp.focus();
+  fkInp.value = 'ann';
+  fkInp.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(250);
+  ck('FK search queried the referenced table',
+    lookups.some(l => l.t === 'person' && l.c === 'id' && l.q === 'ann'), JSON.stringify(lookups));
+  const sug = hostFk.querySelector('.grid-suggest');
+  ck('suggestions visible', sug && sug.style.display === 'block', sug && sug.style.display);
+  sug.querySelector('.grid-sug-item').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+  ck('picking fills in the id', fkInp.value === '2', fkInp.value);
+  ck('dropdown hidden after pick', sug.style.display === 'none', sug.style.display);
+}
 
 // --- read-only when no PK ---
 const host2 = document.createElement('div');

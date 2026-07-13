@@ -97,6 +97,56 @@ export function mountGrid(host, table, hooks) {
     render();
   }
 
+  /* ---- FK columns get live search: type a name, pick the row, the id
+     fills in (hooks.lookupFkRows queries the referenced table) ---- */
+  const sug = el('div', 'grid-suggest');
+  sug.style.display = 'none';
+  let sugFor = null;
+  let sugT = null;
+  function hideSug() { sug.style.display = 'none'; sugFor = null; }
+  function showSug(inp, items) {
+    if (!items.length) { hideSug(); return; }
+    sug.textContent = '';
+    for (const it of items) {
+      const line = el('div', 'grid-sug-item', it.label);
+      line.addEventListener('mousedown', ev => {
+        ev.preventDefault(); // keep focus — blur would commit the cell
+        inp.value = it.id == null ? '' : String(it.id);
+        // the input's own realm's Event — a foreign-realm Event throws in strict DOMs
+        const Ev = inp.ownerDocument.defaultView.Event;
+        inp.dispatchEvent(new Ev('input', { bubbles: true }));
+        clearTimeout(sugT); // don't re-suggest the id that was just picked
+        hideSug();
+      });
+      sug.appendChild(line);
+    }
+    const r = inp.getBoundingClientRect();
+    sug.style.left = r.left + 'px';
+    sug.style.top = (r.bottom + 2) + 'px';
+    sug.style.minWidth = Math.max(r.width, 160) + 'px';
+    sug.style.display = 'block';
+    sugFor = inp;
+  }
+  function wireFkSearch(inp, colName) {
+    const fk = (state.table.fks || []).find(f => f.col === colName);
+    if (!fk || !hooks.lookupFkRows) return;
+    if (!inp.disabled) inp.placeholder = colName + ' — type to search ' + fk.refTable;
+    inp.title = 'foreign key to ' + fk.refTable + '.' + fk.refCol + ' — type a value to search that table';
+    inp.addEventListener('input', () => {
+      clearTimeout(sugT);
+      const q = inp.value.trim();
+      if (!q) { hideSug(); return; }
+      sugT = setTimeout(async () => {
+        try {
+          const items = await hooks.lookupFkRows(fk.refTable, fk.refCol, q);
+          if (document.activeElement === inp && inp.value.trim() === q) showSug(inp, items);
+        } catch { hideSug(); }
+      }, 150);
+    });
+    inp.addEventListener('blur', () => setTimeout(() => { if (sugFor === inp) hideSug(); }, 120));
+    inp.addEventListener('keydown', e => { if (e.key === 'Escape') hideSug(); });
+  }
+
   function cellEditor(td, rowIdx, colIdx) {
     if (!editable) return;
     td.addEventListener('dblclick', () => {
@@ -106,6 +156,7 @@ export function mountGrid(host, table, hooks) {
       const inp = el('input', 'cell-edit');
       const oldStr = old == null ? '' : String(old);
       inp.value = oldStr;
+      wireFkSearch(inp, state.columns[colIdx]);
       td.appendChild(inp);
       inp.focus();
       inp.select();
@@ -184,6 +235,7 @@ export function mountGrid(host, table, hooks) {
         const inp = el('input', 'cell-edit');
         inp.placeholder = def && def.autoInc ? 'auto' : c;
         inp.disabled = !!(def && def.autoInc);
+        wireFkSearch(inp, c);
         inputs.push(inp);
         inp.addEventListener('keydown', e => {
           if (e.key === 'Enter') insertRow(inputs.map(i => i.value));
@@ -203,6 +255,7 @@ export function mountGrid(host, table, hooks) {
     table.appendChild(tbody);
     scroll.appendChild(table);
     host.appendChild(scroll);
+    host.appendChild(sug); // render() clears the host — keep the dropdown alive
   }
 
   load();
