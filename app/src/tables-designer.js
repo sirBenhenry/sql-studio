@@ -695,15 +695,19 @@ export function mountTablesDesigner(host, schema, hooks) {
   host.addEventListener('focusin', cancelScheduled);
 
   /* Ctrl+Z / Ctrl+Y anywhere (outside a text field, where they stay native)
-     while this designer is on screen */
-  activeUndo = () => {
-    const doc = host.ownerDocument;
-    if (doc && doc.body && doc.body.contains(host)) undo();
-  };
-  activeRedo = () => {
-    const doc = host.ownerDocument;
-    if (doc && doc.body && doc.body.contains(host)) redo();
-  };
+     while this designer is on screen. When the host owns a GLOBAL undo
+     timeline (the app does — Ctrl+Z everything), the designer stands down:
+     its keyboard handler stays inert and its buttons route to the host. */
+  if (!hooks.globalUndo) {
+    activeUndo = () => {
+      const doc = host.ownerDocument;
+      if (doc && doc.body && doc.body.contains(host)) undo();
+    };
+    activeRedo = () => {
+      const doc = host.ownerDocument;
+      if (doc && doc.body && doc.body.contains(host)) redo();
+    };
+  }
 
   /* ---------- rendering ---------- */
 
@@ -1012,14 +1016,14 @@ export function mountTablesDesigner(host, schema, hooks) {
         ? 'Edit anything — changes apply when you click away. Dropping things asks first.'
         : 'No tables yet. Add your first one:'));
     const undoBtn = el('button', 'btn small', '↶ undo');
-    undoBtn.title = 'undo the last applied change (Ctrl+Z outside a text field)';
-    undoBtn.disabled = history.length < 2;
-    undoBtn.addEventListener('click', () => undo());
+    undoBtn.title = 'undo the last applied change — schema OR data (Ctrl+Z outside a text field)';
+    undoBtn.disabled = hooks.globalUndo ? false : history.length < 2;
+    undoBtn.addEventListener('click', () => hooks.globalUndo ? hooks.globalUndo() : undo());
     bar.appendChild(undoBtn);
     const redoBtn = el('button', 'btn small', '↷ redo');
     redoBtn.title = 'redo what you just undid (Ctrl+Y)';
-    redoBtn.disabled = !redoStack.length;
-    redoBtn.addEventListener('click', () => redo());
+    redoBtn.disabled = hooks.globalUndo ? false : !redoStack.length;
+    redoBtn.addEventListener('click', () => hooks.globalRedo ? hooks.globalRedo() : redo());
     bar.appendChild(redoBtn);
     const addT = el('button', 'btn small primary', '+ add table');
     addT.addEventListener('click', async () => {

@@ -432,6 +432,7 @@ async function writeSchemaFromModel(model) {
     renderTabs();
   } catch (e) { logErr('schema.sql write failed: ' + e); }
   if (builder) builder.setSchema(text);
+  settleState();
 }
 
 
@@ -478,6 +479,7 @@ async function syncSchemaFromDb() {
     logNote('schema.sql re-synced from the live database');
   } catch (e) { logErr('schema.sql write failed: ' + e); }
   if (builder) builder.setSchema(text);
+  settleState();
 }
 
 /** Ctrl+S on schema.sql: the missing sync direction — diff the edited file
@@ -618,6 +620,8 @@ function renderDbTab(host) {
       reload: () => { if (activeTab === 'db') renderDbTab(host); },
       toast,
       confirm: msg => appConfirm(msg, { title: 'This deletes things', ok: 'Do it' }),
+      globalUndo,
+      globalRedo,
       // undo survives View↔Edit flips; the tour demo gets its own lane
       historyKey: project ? project.root + (tourDemo ? '#demo' : '') : null,
       // a table rename keeps its canvas position and any open grid tab
@@ -712,6 +716,7 @@ async function saveActive() {
     t.savedContent = t.content;
     renderTabs();
     toast(t.label + ' saved');
+    if (t.id === 'schema') settleState();
   } catch (e) { toast(String(e)); }
 }
 
@@ -884,8 +889,118 @@ async function runScriptFast(text, source, opts = {}) {
   return true;
 }
 
+/* ================= global undo: Ctrl+Z EVERYTHING =================
+   The files ARE the state (that's the product), so undo history is a stack
+   of settled {schema, data} pairs — one per journaled change — and undoing
+   restores a pair by rebuilding, exactly like opening a copied project.
+   Console statements are ad-hoc (not journaled) and stay outside history. */
+
+const undoStack = [];
+const redoStack = [];
+let lastSettled = null;   // the {schema, data} pair after the last settled apply
+let restoring = false;
+
+function settleState() {
+  const s = tabById('schema');
+  const d = tabById('data');
+  if (s && d && !restoring) lastSettled = { schema: s.content, data: d.content };
+}
+
+function pushUndo(label) {
+  if (restoring || tourDemo || !lastSettled) return;
+  undoStack.push({ ...lastSettled, label });
+  if (undoStack.length > 60) undoStack.shift();
+  redoStack.length = 0; // a fresh change forks history
+}
+
+/** rebuild the project from a settled pair (schema.sql's header carries the
+ *  DROP/CREATE/USE, so this is the normal rebuild-from-files path) */
+async function restoreFiles(s) {
+  clearTimeout(snapshotTimer); // a pending snapshot must not clobber the restore
+  const okS = await runScriptFast(s.schema, 'undo/redo: schema', { journal: false });
+  if (!okS) {
+    // the rebuild broke halfway — resync files to whatever the DB is now
+    await syncSchemaFromDb();
+    await snapshotData();
+    return false;
+  }
+  currentDb = findCurrentDb(s.schema) || currentDb;
+  const okD = splitSQL(s.data).length
+    ? await runScriptFast(s.data, 'undo/redo: data', { journal: false })
+    : true;
+  const st = tabById('schema');
+  const dt = tabById('data');
+  st.content = s.schema;
+  dt.content = s.data;
+  try {
+    await invoke('file_write', { rel: 'schema.sql', content: s.schema });
+    st.savedContent = s.schema;
+    await invoke('file_write', { rel: 'data.sql', content: s.data });
+    dt.savedContent = s.data;
+  } catch (e) { logErr('restore file write failed: ' + e); }
+  if (activeTab === 'schema') setEditorText(st.content);
+  if (activeTab === 'data') setEditorText(dt.content);
+  renderTabs();
+  reflectDb();
+  if (builder) builder.setSchema(s.schema);
+  const v = $('#view-host');
+  if (v && activeTab === 'db') renderDbTab(v);
+  else if (v && String(activeTab).startsWith('t:')) renderViewTab(tabById(activeTab), v);
+  if (!okD) logErr('the data part of the restore hit an error — see above; schema restored');
+  settleState();
+  return true;
+}
+
+async function globalUndo() {
+  if (restoring) return;
+  if (!engineRunning) { toast('The engine is not running.'); return; }
+  if (!undoStack.length) { toast('Nothing to undo.'); return; }
+  const target = undoStack.pop();
+  const cur = { schema: tabById('schema').content, data: tabById('data').content, label: target.label };
+  restoring = true;
+  try {
+    if (await restoreFiles(target)) {
+      redoStack.push(cur);
+      toast('↶ undid: ' + (target.label || 'last change'));
+    } else {
+      undoStack.push(target);
+      toast('undo failed — see the console');
+    }
+  } finally { restoring = false; }
+}
+
+async function globalRedo() {
+  if (restoring) return;
+  if (!engineRunning) { toast('The engine is not running.'); return; }
+  if (!redoStack.length) { toast('Nothing to redo.'); return; }
+  const target = redoStack.pop();
+  const cur = { schema: tabById('schema').content, data: tabById('data').content, label: target.label };
+  restoring = true;
+  try {
+    if (await restoreFiles(target)) {
+      undoStack.push(cur);
+      toast('↷ redid: ' + (target.label || 'change'));
+    } else {
+      redoStack.push(target);
+      toast('redo failed — see the console');
+    }
+  } finally { restoring = false; }
+}
+
+/* Ctrl+Z / Ctrl+Y anywhere outside a text field — ONE timeline for schema,
+   data, everything applied */
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  const key = String(e.key).toLowerCase();
+  if (key === 'z' && !e.shiftKey) { e.preventDefault(); globalUndo(); }
+  else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); globalRedo(); }
+});
+
 async function journal(source, statements) {
   if (tourDemo) return; // demo activity is not project history
+  pushUndo(source); // the state BEFORE this change becomes an undo step
   const entry = journalEntry(source, statements);
   try {
     await invoke('journal_append', { entry });
@@ -911,7 +1026,7 @@ function scheduleSnapshot() {
 }
 
 async function snapshotData() {
-  if (tourDemo) return; // demo rows must not land in data.sql
+  if (tourDemo || restoring) return; // demo rows / mid-restore must not land in data.sql
   if (!engineRunning || !currentDb || !project) return;
   const t = tabById('data');
   if (!t) return;
@@ -928,7 +1043,7 @@ async function snapshotData() {
     } catch { /* table vanished mid-snapshot — skip */ }
   }
   const text = buildDataSnapshot(model, dumps);
-  if (text === t.content) return;
+  if (text === t.content) { settleState(); return; }
   t.content = text;
   try {
     await invoke('file_write', { rel: 'data.sql', content: text });
@@ -936,6 +1051,7 @@ async function snapshotData() {
     if (activeTab === 'data') setEditorText(text);
     renderTabs();
   } catch (e) { logErr('data.sql write failed: ' + e); }
+  settleState();
 }
 
 let engineStarting = false;
@@ -1038,6 +1154,10 @@ async function reconcile() {
   }
   reflectDb();
   if (builder) builder.setSchema(schemaText);
+  // a (re)opened project starts a fresh undo timeline from this state
+  undoStack.length = 0;
+  redoStack.length = 0;
+  settleState();
 }
 
 /* ================= console ================= */

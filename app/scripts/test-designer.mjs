@@ -687,6 +687,27 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   hostR3.remove();
 }
 
+// ---- with a host-owned GLOBAL undo, the designer's buttons route there ----
+{
+  const schemaG = parseSchema('CREATE TABLE g1 (id INT UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY(id));');
+  let gUndo = 0, gRedo = 0;
+  const hostG = document.createElement('div');
+  document.body.appendChild(hostG);
+  mountTablesDesigner(hostG, schemaG, {
+    runScript: async () => true,
+    writeSchema: async () => {}, openTable: () => {}, reload: () => {}, toast: () => {},
+    globalUndo: () => { gUndo++; },
+    globalRedo: () => { gRedo++; }
+  });
+  const ub = [...hostG.querySelectorAll('button')].find(b => b.textContent === '↶ undo');
+  const rb = [...hostG.querySelectorAll('button')].find(b => b.textContent === '↷ redo');
+  ck('global mode: buttons always enabled', !ub.disabled && !rb.disabled);
+  ub.click();
+  rb.click();
+  ck('global mode: clicks route to the host timeline', gUndo === 1 && gRedo === 1, gUndo + '/' + gRedo);
+  hostG.remove();
+}
+
 // ---- round-trip fuzz: model → createTableDDL → parseSchema → model must
 // survive structurally (this exact invariant broke twice: the truncated
 // (CURDATE()) capture and DEFAULT 3.50 → 3) ----
