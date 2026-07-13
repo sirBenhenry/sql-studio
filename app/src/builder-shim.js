@@ -90,6 +90,12 @@ const HIDE_CSS = `
   .ide-sug-item { padding: 5px 10px; cursor: pointer; white-space: nowrap; }
   .ide-sug-item:hover, .ide-sug-item.active { background: var(--ink); color: var(--bg); }
 
+  /* success flash on the action button */
+  #ide-actionbar .ide-ok {
+    background: #16a34a !important; border-color: #16a34a !important; color: #fff !important;
+    transition: background .15s;
+  }
+
   /* the "+ to file" picker above the action bar */
   #ide-filemenu {
     position: fixed; right: 12px; bottom: 52px; z-index: 60;
@@ -339,7 +345,7 @@ export function wireBuilder(d, win, hooks) {
 
   function refreshBar() {
     const a = ACTIONS[currentMode()];
-    actBtn.textContent = a.label;
+    if (!actBtn.classList.contains('ide-ok')) actBtn.textContent = a.label; // don't stomp the success flash
     actBtn.title = a.title;
     const sql = currentSQL();
     peek.textContent = sql.replace(/\s+/g, ' ');
@@ -360,7 +366,14 @@ export function wireBuilder(d, win, hooks) {
     const sql = currentSQL();
     if (!splitSQL(sql).length) return;
     actBtn.disabled = true;
-    try { await a.run(sql); } finally { refreshBar(); }
+    let ok = false;
+    try { ok = await a.run(sql) !== false; } finally { refreshBar(); }
+    if (ok) {
+      // say it worked, right where the click happened
+      actBtn.classList.add('ide-ok');
+      actBtn.textContent = currentMode() === 'select' ? '✓ ran' : '✓ applied';
+      setTimeout(() => { actBtn.classList.remove('ide-ok'); refreshBar(); }, 1200);
+    }
   });
 
   /* "+ add row" first applies what's built (Ben's rule: adding the next one

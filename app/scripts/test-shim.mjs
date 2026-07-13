@@ -145,6 +145,9 @@ d.querySelector('#tab-insert').click();
   d.querySelector('#ide-actionbar button.primary').click();
   await tick(60);
   ck('Apply runs the insert', calls2.some(c => c.sql && c.sql.includes("'Ben'")), JSON.stringify(calls2));
+  const okBtn = d.querySelector('#ide-actionbar button.primary');
+  ck('success flashes on the button', okBtn.classList.contains('ide-ok') && okBtn.textContent === '✓ applied',
+    okBtn.className + '/' + okBtn.textContent);
   const rows = d.querySelectorAll('#insert-rows .set-row');
   ck('Apply clears the applied rows',
     rows.length === 1 && [...rows[0].querySelectorAll('input')].every(i => !i.value),
