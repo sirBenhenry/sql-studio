@@ -323,6 +323,11 @@ body.split-drag { user-select: none; }
 .log-stmt { color: var(--muted); white-space: pre-wrap; margin: 8px 0 2px; }
 .log-ok { color: #16a34a; }
 .log-err { color: var(--accent); white-space: pre-wrap; }
+.log-hint {
+  color: var(--ink); white-space: pre-wrap;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: .78rem;
+  padding: 2px 0 4px 14px; border-left: 2px solid var(--accent); margin: 2px 0 4px 2px;
+}
 .log-note { color: var(--muted); font-style: italic; }
 
 .result-table { border-collapse: collapse; margin: 4px 0 10px; max-width: 100%; }

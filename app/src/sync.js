@@ -120,6 +120,60 @@ export function buildDataSnapshot(model, dumps) {
   return lines.join('\n');
 }
 
+/** A plain-language hint for a MySQL error message, or null when we have
+ *  nothing better to say than the error itself. Matched on errno. */
+export function explainError(msg) {
+  const m = String(msg || '');
+  const errno = (m.match(/ERROR (\d+)/) || [])[1];
+  const q = re => { const x = m.match(re); return x ? x[1] : null; };
+  switch (errno) {
+    case '1062': {
+      const entry = q(/Duplicate entry '([^']*)'/);
+      return 'That value' + (entry != null ? ' (' + entry + ')' : '') +
+        ' already exists in a column that must be unique. Use a different value, or remove UNIQUE from the column.';
+    }
+    case '1451':
+      return 'Other rows still point at this one through a foreign key. Delete or re-point those rows first — or set the FK to ON DELETE CASCADE in the designer.';
+    case '1452':
+      return 'The row you are referencing does not exist. Check the foreign-key value — the search in FK fields picks only real rows.';
+    case '1048': {
+      const col = q(/Column '([^']*)'/);
+      return (col ? "'" + col + "'" : 'A column') + ' requires a value (NOT NULL). Fill it in, give it a DEFAULT, or click its NOT NULL tag off in the designer.';
+    }
+    case '3819': {
+      const chk = q(/constraint '([^']*)'/);
+      return 'The value breaks an allowed range' + (chk ? ' (' + chk + ')' : '') +
+        ' — a CHECK set on the column. Adjust the value, or widen the range in the column\'s properties.';
+    }
+    case '1064':
+      return 'MySQL could not read that as SQL — usually a typo, a missing comma/quote, or a reserved word used as a name (wrap it in `backticks`).';
+    case '1146':
+      return 'That table does not exist in the live database. If it only exists in schema.sql, save the file to apply it — or check the spelling.';
+    case '1049':
+      return 'That database does not exist. Check the name — or create it first (CREATE DATABASE …).';
+    case '1054':
+      return 'No such column. Check the spelling — the schema may have changed since the query was written.';
+    case '1075':
+      return 'AUTO_INCREMENT only works on a key column. Make the column the PRIMARY KEY (or drop AUTO_INCREMENT).';
+    case '3730':
+      return 'Another table\'s foreign key depends on this one. Drop the dependent table (or its FK) first.';
+    case '1366':
+      return 'The value does not fit the column type (e.g. text into a number column). Check the value — or change the column type.';
+    case '1406':
+      return 'The text is longer than the column allows. Shorten it, or raise the length in the designer (e.g. VARCHAR(255)).';
+    case '1265':
+      return 'The value was cut off — it does not fit the column type/length.';
+    case '1093':
+      return 'MySQL cannot read the same table it is changing in a plain subquery. The builder wraps these automatically — for hand-written SQL, wrap the subquery: (SELECT … FROM (SELECT …) AS x).';
+    case '1213':
+      return 'Two changes blocked each other (deadlock) and this one was rolled back. Just run it again.';
+    case '1205':
+      return 'Timed out waiting for a lock — something else holds the row. Try again in a moment.';
+    default:
+      return null;
+  }
+}
+
 /** journal entry text for a batch of applied statements */
 export function journalEntry(source, statements) {
   const when = new Date().toISOString().replace('T', ' ').slice(0, 19);

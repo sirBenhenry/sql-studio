@@ -1,5 +1,5 @@
 // Unit tests for the sync plumbing (splitSQL / findCurrentDb / helpers).
-import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, snapshotTableOrder, buildDataSnapshot } from '../src/sync.js';
+import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, snapshotTableOrder, buildDataSnapshot, explainError } from '../src/sync.js';
 
 let fail = 0;
 const ck = (name, cond, extra) => {
@@ -90,6 +90,18 @@ ck('snapshot: numeric cols unquoted', snap.includes("(1, 2, 'it''s; done')"), sn
 ck('snapshot: NULL and backslash escaping', snap.includes("(2, NULL, 'C:\\\\tmp')"), snap);
 ck('snapshot: empty tables omitted', !snap.includes('empty_one'), snap);
 ck('snapshot: replayable by splitSQL', splitSQL(snap).length === 2, JSON.stringify(splitSQL(snap)));
+
+// --- explainError ---
+ck('1062 duplicate names the value',
+  /already exists/.test(explainError("MySqlError { ERROR 1062 (23000): Duplicate entry 'ben@x.io' for key 'member.email' }")) &&
+  explainError("MySqlError { ERROR 1062 (23000): Duplicate entry 'ben@x.io' for key 'x' }").includes('ben@x.io'));
+ck('1451 explains dependent rows', /point at this one/.test(explainError('ERROR 1451 (23000): Cannot delete or update a parent row')));
+ck('1452 explains missing reference', /does not exist/.test(explainError('ERROR 1452 (23000): Cannot add or update a child row')));
+ck('1048 names the column', explainError("ERROR 1048 (23000): Column 'name' cannot be null").includes("'name'"));
+ck('3819 explains checks', /allowed range/.test(explainError("ERROR 3819 (HY000): Check constraint 'u_chk_1' is violated.")));
+ck('1064 explains syntax', /typo/.test(explainError("ERROR 1064 (42000): You have an error in your SQL syntax")));
+ck('unknown errno stays silent', explainError('ERROR 9999 (XX000): strange') === null);
+ck('non-mysql text stays silent', explainError('journal write failed: io') === null);
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);

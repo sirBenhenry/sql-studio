@@ -2,7 +2,7 @@
 // console, the embedded builder, and the sync pipeline glue.
 'use strict';
 
-import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, buildDataSnapshot, snapshotTableOrder } from './sync.js';
+import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, buildDataSnapshot, snapshotTableOrder, explainError } from './sync.js';
 import { mountBuilder } from './builder-shim.js';
 import { mountGrid } from './grid.js';
 import { mountTablesDesigner, createTableDDL } from './tables-designer.js';
@@ -748,6 +748,14 @@ function logStmt(sql) {
 function logErr(text) {
   const d = el('div', 'log-err', text);
   $('#console-log').appendChild(d);
+  // a plain-language line under the raw error, when we know what it means
+  const hint = explainError(text);
+  if (hint) {
+    const h = el('div', 'log-hint', '💡 ' + hint);
+    $('#console-log').appendChild(h);
+    h.scrollIntoView({ block: 'end' });
+    return;
+  }
   d.scrollIntoView({ block: 'end' });
 }
 function logOk(text) {
