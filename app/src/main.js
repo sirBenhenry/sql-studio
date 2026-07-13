@@ -547,7 +547,7 @@ async function renderViewTab(t, host) {
           const res = await invoke('db_exec', { sql, db: currentDb });
           if (mutation) { logStmt(sql); logResult(res); } // grid edits echo like console ones
           return res;
-        } catch (e) { logStmt(sql); logErr(String(e)); return null; }
+        } catch (e) { logStmt(sql); logErr(String(e)); noteEngineError(e); return null; }
       },
       journal: (source, stmts) => journal(source, stmts),
       shouldConfirm: () => SETTINGS.confirmDelete,
@@ -586,9 +586,13 @@ async function saveActive() {
     return;
   }
   // schema.sql saves are the file→database direction of the sync
-  if (t.id === 'schema' && engineRunning && currentDb) {
-    const applied = await applySchemaFile(t);
-    if (!applied) return; // parse failure or user declined — nothing written
+  if (t.id === 'schema') {
+    if (engineRunning && currentDb) {
+      const applied = await applySchemaFile(t);
+      if (!applied) return; // parse failure or user declined — nothing written
+    } else {
+      logErr('schema.sql saved to disk ONLY — the engine is not running, so the database was not updated. Ctrl+S again once it is back.');
+    }
   }
   try {
     await invoke('file_write', { rel: t.rel, content: t.content });
@@ -730,7 +734,7 @@ async function runScriptFast(text, source, opts = {}) {
   if (!engineRunning) { logErr('engine not running'); return false; }
   let res;
   try { res = await invoke('db_exec_batch', { stmts, db: currentDb }); }
-  catch (e) { logErr(String(e)); return false; }
+  catch (e) { logErr(String(e)); noteEngineError(e); return false; }
   const named = findCurrentDb(stmts.slice(0, res.applied).join(';\n'));
   if (named) currentDb = named;
   if (res.error) {
@@ -799,7 +803,10 @@ async function snapshotData() {
   } catch (e) { logErr('data.sql write failed: ' + e); }
 }
 
+let engineStarting = false;
 async function startEngine(root) {
+  if (engineStarting) return;
+  engineStarting = true;
   setEngineStatus('● engine: starting…');
   try {
     const info = await invoke('db_start', { projectRoot: root });
@@ -814,6 +821,8 @@ async function startEngine(root) {
     setEngineStatus('● engine: failed', 'err');
     logErr(String(e));
     firePendingTour(); // the tour still works, just without the demo db
+  } finally {
+    engineStarting = false;
   }
 }
 
