@@ -114,8 +114,22 @@ export function modelFromSchema(schema) {
   }));
 }
 
+/** the type+args pair in MySQL's own spelling — BOOLEAN is stored as
+ *  tinyint(1), INTEGER as int, and 8.x drops legacy display widths; without
+ *  canonicalizing, a file→DB diff would emit the same MODIFY forever */
+function canonType(type, args) {
+  let t = String(type || '').toUpperCase();
+  let a = String(args || '').trim();
+  if (t === 'BOOLEAN' || t === 'BOOL') { t = 'TINYINT'; a = '1'; }
+  if (t === 'INTEGER') t = 'INT';
+  if (t === 'NUMERIC') t = 'DECIMAL';
+  // display widths on non-tinyint(1) ints are dead in 8.x — INT(11) ≡ INT
+  if (/^(INT|SMALLINT|MEDIUMINT|BIGINT)$/.test(t)) a = '';
+  return t + '(' + a + ')';
+}
+
 function sameCol(a, b) {
-  return a.type === b.type && String(a.args || '') === String(b.args || '') &&
+  return canonType(a.type, a.args) === canonType(b.type, b.args) &&
     !!a.uns === !!b.uns && !!a.nn === !!b.nn && !!a.ai === !!b.ai && !!a.uq === !!b.uq &&
     String(a.def || '') === String(b.def || '') &&
     String(a.chkMin || '') === String(b.chkMin || '') &&

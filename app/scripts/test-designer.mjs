@@ -602,6 +602,15 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   ck('FK removed in file → dropFk fixup only',
     d4.fixups.some(f => f.dropFk) && !d4.stmts.some(s => s.includes('ADD FOREIGN KEY')),
     JSON.stringify(d4.fixups.concat(d4.stmts)));
+
+  // type aliases: the file says BOOLEAN/INTEGER, SHOW CREATE says tinyint(1)/int —
+  // that must NOT diff (it once would have emitted the same MODIFY forever)
+  const d5 = diffModels(
+    file('CREATE TABLE flags (id INT UNSIGNED NOT NULL AUTO_INCREMENT, ok BOOLEAN NOT NULL, n INTEGER, PRIMARY KEY(id));'),
+    file('CREATE TABLE flags (id INT(10) UNSIGNED NOT NULL AUTO_INCREMENT, ok TINYINT(1) NOT NULL, n INT(11), PRIMARY KEY(id));'));
+  ck('BOOLEAN≡tinyint(1), INTEGER≡int(11) — no phantom MODIFY',
+    d5.stmts.length === 0 && d5.fixups.length === 0,
+    JSON.stringify(d5.stmts.concat(d5.fixups)));
 }
 
 // ---- undo history survives a remount (View↔Edit flip) ----
