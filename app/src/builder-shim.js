@@ -243,7 +243,7 @@ export function wireBuilder(d, win, hooks) {
       label: '✓ Apply',
       title: 'execute against the project database',
       sqlSel: '#update-sql',
-      run: sql => confirmUnfiltered(sql, 'updates')
+      run: async sql => (await confirmUnfiltered(sql, 'updates'))
         ? hooks.runScript(sql, 'builder: update', { journal: true })
         : false
     },
@@ -251,7 +251,7 @@ export function wireBuilder(d, win, hooks) {
       label: '✓ Apply',
       title: 'execute against the project database',
       sqlSel: '#delete-sql',
-      run: sql => confirmUnfiltered(sql, 'deletes')
+      run: async sql => (await confirmUnfiltered(sql, 'deletes'))
         ? hooks.runScript(sql, 'builder: delete', { journal: true })
         : false
     },
@@ -265,12 +265,15 @@ export function wireBuilder(d, win, hooks) {
   };
 
   /* the lite tool warns about condition-less UPDATE/DELETE in a COMMENT —
-     which this shim strips. In the IDE the warning must be a real gate. */
-  function confirmUnfiltered(sql, verb) {
+     which this shim strips. In the IDE the warning must be a real gate.
+     hooks.confirm = the host's DOM modal (window.confirm doesn't display
+     in the app's webview). */
+  async function confirmUnfiltered(sql, verb) {
     if (/\bWHERE\b/i.test(sql)) return true;
     const tbl = (sql.match(/(?:FROM|UPDATE)\s+`?([\w$]+)`?/i) || [])[1] || 'the table';
-    return win.confirm('⚠ No condition — this ' + verb.replace(/s$/, '') +
-      ' EVERY row in ' + tbl + '.\n\nApply anyway?');
+    const msg = '⚠ No condition — this ' + verb.replace(/s$/, '') +
+      ' EVERY row in ' + tbl + '.\n\nApply anyway?';
+    return hooks.confirm ? await hooks.confirm(msg) : win.confirm(msg);
   }
 
   /* generated SQL, comment lines stripped (placeholders/warnings) */

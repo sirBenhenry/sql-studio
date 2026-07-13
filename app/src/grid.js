@@ -102,7 +102,11 @@ export function mountGrid(host, table, hooks) {
   async function deleteRow(rowIdx) {
     const sql = 'DELETE FROM `' + state.table.name + '` WHERE ' + whereForRow(rowIdx) + ' LIMIT 1';
     const needConfirm = !hooks.shouldConfirm || hooks.shouldConfirm();
-    if (needConfirm && !window.confirm('Delete this row from ' + state.table.name + '?\n\n' + sql)) return;
+    if (needConfirm) {
+      const msg = 'Delete this row from ' + state.table.name + '?\n\n' + sql;
+      const okGo = hooks.confirmDialog ? await hooks.confirmDialog(msg) : window.confirm(msg);
+      if (!okGo) return;
+    }
     const res = await hooks.exec(sql);
     if (res) {
       hooks.journal('grid: delete from ' + state.table.name, [sql]);

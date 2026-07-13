@@ -644,6 +644,33 @@ body.split-drag { user-select: none; }
 }
 #dbname-modal .hint { margin: 0 0 12px; }
 
+/* generic confirm/prompt modals (window.confirm doesn't display in the webview) */
+.cfm-backdrop {
+  position: fixed; inset: 0; z-index: 96;
+  background: color-mix(in srgb, var(--ink) 45%, transparent);
+}
+.cfm-modal {
+  position: fixed; z-index: 97;
+  top: 50%; left: 50%; transform: translate(-50%, -60%);
+  width: min(480px, calc(100vw - 32px));
+  background: var(--bg); color: var(--ink);
+  border: 2px solid var(--ink);
+  box-shadow: 0 14px 40px rgba(0,0,0,.4);
+  padding: 18px 20px 16px;
+}
+.cfm-modal h3 {
+  margin: 0 0 10px; font-size: .8rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .1em;
+}
+.cfm-msg {
+  margin: 0 0 14px; max-height: 300px; overflow-y: auto; overflow-x: hidden;
+  font-family: var(--mono); font-size: .74rem; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.cfm-input { width: 100%; margin-bottom: 14px; }
+.cfm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.cfm-danger { background: var(--accent) !important; border-color: var(--accent) !important; }
+
 /* ================= toast ================= */
 #toast {
   position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%) translateY(20px);

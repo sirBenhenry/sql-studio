@@ -75,9 +75,43 @@ if (typeof document !== 'undefined') {
   });
 }
 
+/** MySQL echoes column CHECKs as table-level `CONSTRAINT x CHECK ((…))`
+ *  lines — fold single-column range checks back onto their column, or the
+ *  file↔DB diff re-emits the same MODIFY forever (this happened, five
+ *  times in one journal). Anything not clearly a range stays verbatim. */
+function foldExtraChecks(t) {
+  const keep = [];
+  for (const ex of t.extras || []) {
+    const m = ex.match(/^CONSTRAINT\s+`?[\w$]+`?\s+CHECK\s*\(([\s\S]*)\)$/i) ||
+              ex.match(/^CHECK\s*\(([\s\S]*)\)$/i);
+    if (!m) { keep.push(ex); continue; }
+    let expr = m[1].trim();
+    while (/^\(.*\)$/.test(expr) && parensBalanced(expr.slice(1, -1))) expr = expr.slice(1, -1).trim();
+    const names = [...new Set([...expr.matchAll(/`([\w$]+)`/g)].map(x => x[1]))];
+    const col = names.length === 1 ? t.cols.find(c => c.name === names[0]) : null;
+    let folded = false;
+    if (col && !String(col.chkMin || '') && !String(col.chkMax || '') && !String(col.rawCheck || '')) {
+      let mm;
+      if ((mm = expr.match(/^`?[\w$]+`?\s+between\s+(-?\d+(?:\.\d+)?)\s+and\s+(-?\d+(?:\.\d+)?)$/i))) {
+        col.chkMin = mm[1];
+        col.chkMax = mm[2];
+        folded = true;
+      } else if ((mm = expr.match(/^`?[\w$]+`?\s*>=\s*(-?\d+(?:\.\d+)?)$/))) {
+        col.chkMin = mm[1];
+        folded = true;
+      } else if ((mm = expr.match(/^`?[\w$]+`?\s*<=\s*(-?\d+(?:\.\d+)?)$/))) {
+        col.chkMax = mm[1];
+        folded = true;
+      }
+    }
+    if (!folded) keep.push(ex);
+  }
+  t.extras = keep;
+}
+
 /** designer model from the shared parser model */
 export function modelFromSchema(schema) {
-  return (schema.tables || []).map(t => ({
+  const model = (schema.tables || []).map(t => ({
     _uid: uid(),
     name: t.name,
     origName: t.name,
@@ -102,16 +136,21 @@ export function modelFromSchema(schema) {
           rawCheck = chk;
         }
       }
-      const col = {
+      return {
         _uid: uid(),
         name: c.name, type: st.type, args: st.args,
         uns: !!c.unsigned, nn: !!c.notNull, ai: !!c.autoInc, pk: !!c.pk,
         uq: !!c.unique, def: displayLit(c.dflt), chkMin, chkMax, rawCheck
       };
-      col.orig = { ...col };
-      return col;
     })
   }));
+  for (const t of model) {
+    foldExtraChecks(t); // must run BEFORE the orig snapshot — same truth on both sides
+    for (const col of t.cols) {
+      col.orig = { ...col };
+    }
+  }
+  return model;
 }
 
 /** the type+args pair in MySQL's own spelling — BOOLEAN is stored as
@@ -545,10 +584,15 @@ export function mountTablesDesigner(host, schema, hooks) {
     if (committing) return false;
     const { stmts, destructive, fixups } = computeDiff(model, snapshotNames);
     if (!stmts.length && !fixups.length) return true; // nothing to do IS success
-    if (destructive.length &&
-        !window.confirm('This will permanently:\n  · ' + destructive.join('\n  · ') + '\n\nContinue?')) {
-      reload(); // revert the cards to the committed state
-      return false;
+    if (destructive.length) {
+      const msg = 'This will permanently:\n  · ' + destructive.join('\n  · ') + '\n\nContinue?';
+      // hooks.confirm = the host's DOM modal (window.confirm doesn't display
+      // in the app's webview); the bare fallback keeps jsdom tests simple
+      const okGo = hooks.confirm ? await hooks.confirm(msg) : window.confirm(msg);
+      if (!okGo) {
+        reload(); // revert the cards to the committed state
+        return false;
+      }
     }
     committing = true;
     try {

@@ -20,6 +20,54 @@ const el = (tag, cls, text) => {
   return e;
 };
 
+/* ================= reliable dialogs =================
+   window.confirm/prompt do NOT display in this webview (they silently
+   auto-accept) — every yes/no in the app goes through these DOM modals. */
+
+function appDialog({ title, message, ok, cancel, danger, input, value }) {
+  return new Promise(resolve => {
+    const back = el('div', 'cfm-backdrop');
+    const box = el('div', 'cfm-modal');
+    box.appendChild(el('h3', null, title || 'Are you sure?'));
+    if (message) box.appendChild(el('pre', 'cfm-msg', message));
+    let inp = null;
+    if (input) {
+      inp = el('input', 'set-num cfm-input');
+      inp.type = 'text';
+      inp.spellcheck = false;
+      inp.value = value || '';
+    }
+    if (inp) box.appendChild(inp);
+    const row = el('div', 'cfm-actions');
+    const cancelBtn = el('button', 'btn small', cancel || 'Cancel');
+    const okBtn = el('button', 'btn small primary' + (danger ? ' cfm-danger' : ''), ok || 'Continue');
+    row.appendChild(cancelBtn);
+    row.appendChild(okBtn);
+    box.appendChild(row);
+    document.body.appendChild(back);
+    document.body.appendChild(box);
+    const done = val => {
+      back.remove();
+      box.remove();
+      document.removeEventListener('keydown', onKey, true);
+      resolve(val);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(input ? null : false); }
+      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); done(input ? (inp.value ?? '') : true); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    cancelBtn.addEventListener('click', () => done(input ? null : false));
+    okBtn.addEventListener('click', () => done(input ? (inp.value ?? '') : true));
+    back.addEventListener('click', () => done(input ? null : false));
+    (inp || okBtn).focus();
+    if (inp) inp.select();
+  });
+}
+
+const appConfirm = (message, opts = {}) => appDialog({ message, danger: true, ...opts });
+const appPrompt = (title, value) => appDialog({ title, input: true, value, ok: 'OK' });
+
 function toast(msg) {
   const t = $('#toast');
   t.textContent = msg;
@@ -466,7 +514,7 @@ async function applySchemaFile(t) {
     msg += '\n\n(note: the database name change "' + currentDb + '" → "' + headerDb +
       '" is NOT applied live — it only takes effect on a rebuild from files)';
   }
-  if (!window.confirm(msg + '\n\nApply?')) return false;
+  if (!(await appConfirm(msg, { title: 'Apply schema.sql to the live database?', ok: 'Apply' }))) return false;
 
   const ok = await runScript(all.join(';\n') + ';', 'schema.sql saved', {
     journal: true,
@@ -569,6 +617,7 @@ function renderDbTab(host) {
       openTable: openTableGrid,
       reload: () => { if (activeTab === 'db') renderDbTab(host); },
       toast,
+      confirm: msg => appConfirm(msg, { title: 'This deletes things', ok: 'Do it' }),
       // undo survives View↔Edit flips; the tour demo gets its own lane
       historyKey: project ? project.root + (tourDemo ? '#demo' : '') : null,
       // a table rename keeps its canvas position and any open grid tab
@@ -614,6 +663,7 @@ async function renderViewTab(t, host) {
       },
       journal: (source, stmts) => journal(source, stmts),
       shouldConfirm: () => SETTINGS.confirmDelete,
+      confirmDialog: msg => appConfirm(msg, { title: 'Delete row?', ok: 'Delete' }),
       rowLimit: () => SETTINGS.rowLimit,
       lookupFkRows: fkRowSearch
     });
@@ -667,7 +717,7 @@ async function saveActive() {
 
 async function renameQueryTab(t) {
   const cur = t.id.slice(2);
-  const raw = window.prompt('Rename ' + t.label + ' to…', cur);
+  const raw = await appPrompt('Rename ' + t.label + ' to…', cur);
   if (raw == null) return;
   const name = raw.trim().replace(/\.sql$/i, '').replace(/[^\w$-]+/g, '_');
   if (!name || name === cur) return;
@@ -1129,9 +1179,10 @@ async function importDump() {
   const stmts = splitSQL(text);
   if (!stmts.length) { toast('No SQL statements found in that file.'); return; }
   const fname = String(path).split(/[\\/]/).pop();
-  if (!window.confirm('Import ' + fname + '?\n\n' + stmts.length + ' statement' + (stmts.length === 1 ? '' : 's') +
+  if (!(await appConfirm(stmts.length + ' statement' + (stmts.length === 1 ? '' : 's') +
     ' will run against this project\'s live database.\nTables with the same names may conflict.\n\n' +
-    'Afterwards schema.sql and data.sql are regenerated from the database.')) return;
+    'Afterwards schema.sql and data.sql are regenerated from the database.',
+    { title: 'Import ' + fname + '?', ok: 'Import' }))) return;
   logNote('importing ' + fname + ' (' + stmts.length + ' statements)…');
   const ok = await runScriptFast(text, 'import: ' + fname, { journal: false });
   // whatever happened, the files must mirror what the DB is NOW
@@ -1192,13 +1243,11 @@ async function endTourDemo() {
 
 async function startAppTour() {
   const settle = ms => new Promise(r => setTimeout(r, ms));
-  // an empty project has nothing to show — borrow the demo library for the
-  // duration of the tour (removed again in onEnd)
-  let usedDemo = false;
-  if (!schemaModel().tables.length) {
-    usedDemo = await loadTourDemo();
-    if (usedDemo) await settle(150);
-  }
+  // the tour ALWAYS tours the demo library (a header-only project would show
+  // nothing, and touring someone's real data risks touching it); it's
+  // removed again in onEnd and never reaches the files
+  const usedDemo = await loadTourDemo();
+  if (usedDemo) await settle(150);
   const dbTabBtn = () => [...document.querySelectorAll('#file-tabs .ftab')].find(b => b.textContent.includes('⊞ database'));
   const segBtn = label => [...document.querySelectorAll('.dbtab-bar .seg button')].find(x => x.textContent === label);
   const dbSeg = label => {
@@ -1239,9 +1288,10 @@ async function startAppTour() {
       target: '#editor-host',
       title: 'A demo to explore',
       prep: () => activateTab('schema'),
-      text: 'Your project was empty, so the tour brought a small lending library along — ' +
-        'authors, books, members, loans. It exists only during the tour: the moment you ' +
-        'finish (or skip), it vanishes and your project is exactly as you left it.'
+      text: 'The tour brought a small lending library along — authors, books, members, ' +
+        'loans — so there is something safe to poke at. Your own project is set aside ' +
+        'for the duration: the moment you finish (or skip), the demo vanishes and ' +
+        'everything is exactly as you left it.'
     }] : []),
     {
       target: '#file-tabs',
@@ -1428,6 +1478,7 @@ function flashBuilderSync() {
 builder = mountBuilder($('#builder-host'), {
   runScript,
   appendData,
+  confirm: msg => appConfirm(msg, { title: 'Careful', ok: 'Apply anyway' }),
   /* live values for the FK-by-name autocomplete: real rows, fuzzy-matched */
   async lookupValues(table, column, prefix) {
     if (!engineRunning || !currentDb) return [];

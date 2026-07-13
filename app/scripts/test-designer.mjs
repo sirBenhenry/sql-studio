@@ -624,6 +624,22 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   ck('default spellings canonicalized — no phantom MODIFY',
     d6.stmts.length === 0 && d6.fixups.length === 0,
     JSON.stringify(d6.stmts.concat(d6.fixups)));
+
+  // MySQL echoes column CHECKs as table-level CONSTRAINT lines (Ben's journal
+  // had the same MODIFY five times because of this) — they must fold back
+  const d7 = diffModels(
+    file('CREATE TABLE session (id INT UNSIGNED NOT NULL AUTO_INCREMENT, players INT UNSIGNED NOT NULL CHECK (`players` BETWEEN 1 AND 8), PRIMARY KEY(id));'),
+    file('CREATE TABLE session (id INT UNSIGNED NOT NULL AUTO_INCREMENT, players INT UNSIGNED NOT NULL, PRIMARY KEY(id), CONSTRAINT `session_chk_1` CHECK ((`players` between 1 and 8)));'));
+  ck('table-level CONSTRAINT CHECK folds onto its column — no phantom MODIFY',
+    d7.stmts.length === 0 && d7.fixups.length === 0,
+    JSON.stringify(d7.stmts.concat(d7.fixups)));
+  const foldedModel = file('CREATE TABLE s2 (id INT, players INT, CONSTRAINT `c1` CHECK ((`players` between 1 and 8)));');
+  ck('folded range lands in the column model',
+    foldedModel[0].cols[1].chkMin === '1' && foldedModel[0].cols[1].chkMax === '8' &&
+    foldedModel[0].extras.length === 0,
+    JSON.stringify(foldedModel[0].cols[1]) + ' extras:' + JSON.stringify(foldedModel[0].extras));
+  const multiCol = file('CREATE TABLE s3 (a INT, b INT, CONSTRAINT `c2` CHECK ((`a` < `b`)));');
+  ck('multi-column CHECK stays a verbatim extra', multiCol[0].extras.length === 1, JSON.stringify(multiCol[0].extras));
 }
 
 // ---- undo history survives a remount (View↔Edit flip) ----
