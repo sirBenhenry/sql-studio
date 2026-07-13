@@ -144,6 +144,57 @@ ck('DELETE addressed by PK', del === 'DELETE FROM `item` WHERE `id` = 1 LIMIT 1'
   ck('dropdown hidden after pick', sug.style.display === 'none', sug.style.display);
 }
 
+// --- '' vs NULL, sort, load-more ---
+{
+  const execd = [];
+  const hostS = document.createElement('div');
+  document.body.appendChild(hostS);
+  const rows40 = Array.from({ length: 40 }, (_, i) => [String(i + 1), 'n' + i]);
+  mountGrid(hostS, {
+    name: 'srt',
+    columns: [{ name: 'id', pk: true, numeric: true }, { name: 'name' }],
+    fks: []
+  }, {
+    exec: async sql => {
+      execd.push(sql);
+      if (/^SELECT/.test(sql)) return { columns: ['id', 'name'], rows: rows40.slice(0, 40), affected: 0, elapsed_ms: 0 };
+      return { columns: [], rows: [], affected: 1, elapsed_ms: 0 };
+    },
+    journal: () => {},
+    rowLimit: () => 40
+  });
+  await tick(); await tick();
+
+  // sort: asc → desc → natural
+  const nameTh = [...hostS.querySelectorAll('th')].find(t => t.textContent.startsWith('name'));
+  nameTh.click();
+  await tick(); await tick();
+  ck('header click sorts ascending', execd.some(s => s.includes('ORDER BY `name` ASC')), execd.join(' | '));
+  [...hostS.querySelectorAll('th')].find(t => t.textContent.startsWith('name')).click();
+  await tick(); await tick();
+  ck('second click sorts descending', execd.some(s => s.includes('ORDER BY `name` DESC')));
+  [...hostS.querySelectorAll('th')].find(t => t.textContent.startsWith('name')).click();
+  await tick(); await tick();
+  ck('third click back to natural', !execd[execd.length - 1].includes('ORDER BY'), execd[execd.length - 1]);
+
+  // load-more doubles the limit
+  const more = [...hostS.querySelectorAll('button')].find(b => b.textContent === '+ load more');
+  ck('load-more offered at the limit', !!more);
+  more.click();
+  await tick(); await tick();
+  ck('load-more doubles the limit', execd.some(s => s.includes('LIMIT 80')), execd[execd.length - 1]);
+
+  // '' stores an empty string, blank stays NULL
+  execd.length = 0;
+  const td = hostS.querySelectorAll('tbody tr')[0].children[1];
+  td.dispatchEvent(new window.Event('dblclick', { bubbles: true }));
+  const e = td.querySelector('input');
+  e.value = "''";
+  e.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick(); await tick();
+  ck("typed '' updates to an empty string", execd.some(s => s.includes("SET `name` = ''")), execd.join(' | '));
+}
+
 // --- a failing first load must show an error, not keep the old view ---
 {
   const hostErr = document.createElement('div');

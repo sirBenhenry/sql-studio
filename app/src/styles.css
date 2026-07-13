@@ -343,6 +343,8 @@ body.split-drag { user-select: none; }
   font-weight: 700; text-transform: uppercase; font-size: .64rem; letter-spacing: .06em;
   color: var(--muted);
 }
+.grid-table th.sortable { cursor: pointer; user-select: none; }
+.grid-table th.sortable:hover { color: var(--ink); }
 .result-table td.null { color: var(--muted); font-style: italic; }
 
 .console-input-row { border-top: 1px solid var(--line); flex: 0 0 auto; }

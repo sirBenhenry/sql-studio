@@ -463,8 +463,10 @@ async function renderViewTab(t, host) {
     if (!def) { host.textContent = ''; host.appendChild(el('p', 'hint pad', 'table ' + name + ' is not in the schema anymore')); return; }
     mountGrid(host, def, {
       exec: async sql => {
+        const mutation = !/^SELECT\b/i.test(sql.trim());
         try {
           const res = await invoke('db_exec', { sql, db: currentDb });
+          if (mutation) { logStmt(sql); logResult(res); } // grid edits echo like console ones
           return res;
         } catch (e) { logStmt(sql); logErr(String(e)); return null; }
       },

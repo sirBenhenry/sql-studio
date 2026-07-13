@@ -12,6 +12,7 @@ export function mountGrid(host, table, hooks) {
     rows: [],
     columns: [],
     limit: (hooks.rowLimit && hooks.rowLimit()) || 500,
+    sort: null,     // { col, dir: 'ASC'|'DESC' }
     dirty: false
   };
 
@@ -25,6 +26,7 @@ export function mountGrid(host, table, hooks) {
   const esc = v => String(v).replace(/'/g, "''");
   const lit = (v, colName) => {
     if (v == null || v === '') return 'NULL';
+    if (v === "''") return "''"; // typed two quotes = an actual empty string
     const col = state.table.columns.find(c => c.name === colName);
     if (col && col.numeric && /^-?\d+(\.\d+)?$/.test(String(v).trim())) return String(v).trim();
     if (/^(NOW\(\)|CURRENT_TIMESTAMP|CURDATE\(\)|CURTIME\(\))$/i.test(String(v).trim())) return String(v).trim().toUpperCase();
@@ -46,7 +48,8 @@ export function mountGrid(host, table, hooks) {
   }
 
   async function load() {
-    const res = await hooks.exec('SELECT * FROM `' + state.table.name + '` LIMIT ' + state.limit);
+    const order = state.sort ? ' ORDER BY `' + state.sort.col + '` ' + state.sort.dir : '';
+    const res = await hooks.exec('SELECT * FROM `' + state.table.name + '`' + order + ' LIMIT ' + state.limit);
     if (!res) {
       // never leave whatever was on screen before — show the failure
       host.textContent = '';
@@ -71,7 +74,7 @@ export function mountGrid(host, table, hooks) {
     const res = await hooks.exec(sql);
     if (res) {
       hooks.journal('grid: edit ' + state.table.name + '.' + col, [sql]);
-      state.rows[rowIdx][colIdx] = newVal === '' ? null : newVal;
+      state.rows[rowIdx][colIdx] = newVal === '' ? null : newVal === "''" ? '' : newVal;
     }
     render();
   }
@@ -173,6 +176,7 @@ export function mountGrid(host, table, hooks) {
       inp.select();
       // clicking away commits, like everywhere else in the app; Escape cancels
       let done = false;
+      inp.title = 'blank = NULL · two quotes \'\' = an empty string';
       const commit = () => {
         if (done) return;
         done = true;
@@ -196,7 +200,13 @@ export function mountGrid(host, table, hooks) {
     head.appendChild(el('span', 'grid-note',
       state.rows.length + ' row' + (state.rows.length === 1 ? '' : 's') +
       (state.rows.length >= state.limit ? ' (first ' + state.limit + ')' : '') +
-      (editable ? ' · double-click a cell to edit' : ' · read-only (no primary key)')));
+      (editable ? ' · double-click a cell to edit · click a header to sort' : ' · read-only (no primary key)')));
+    if (state.rows.length >= state.limit) {
+      const more = el('button', 'btn small', '+ load more');
+      more.title = 'show ' + state.limit + ' more rows';
+      more.addEventListener('click', () => { state.limit *= 2; load(); });
+      head.appendChild(more);
+    }
     const reload = el('button', 'btn small', '↻');
     reload.title = 'reload';
     reload.addEventListener('click', load);
@@ -208,9 +218,18 @@ export function mountGrid(host, table, hooks) {
     const thead = el('thead');
     const hr = el('tr');
     for (const c of state.columns) {
-      const th = el('th', null, c);
+      const sorted = state.sort && state.sort.col === c;
+      const th = el('th', null, c + (sorted ? (state.sort.dir === 'ASC' ? ' ▲' : ' ▼') : ''));
       const def = state.table.columns.find(x => x.name === c);
       if (def && def.pk) th.classList.add('pk');
+      th.classList.add('sortable');
+      th.title = 'sort by ' + c;
+      th.addEventListener('click', () => {
+        state.sort = sorted && state.sort.dir === 'ASC'
+          ? { col: c, dir: 'DESC' }
+          : sorted ? null : { col: c, dir: 'ASC' }; // asc → desc → natural
+        load();
+      });
       hr.appendChild(th);
     }
     if (editable) hr.appendChild(el('th', null, ''));
