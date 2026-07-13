@@ -980,9 +980,16 @@ function logResult(res) {
 const conHist = [];
 let conHistIdx = -1;   // -1 = editing a fresh line
 let conDraft = '';
-$('#console-input').addEventListener('keydown', e => {
+const conBox = $('#console-input');
+function conResize() {
+  conBox.style.height = 'auto';
+  conBox.style.height = Math.min(conBox.scrollHeight, 120) + 'px';
+}
+conBox.addEventListener('input', conResize);
+conBox.addEventListener('keydown', e => {
   const box = e.target;
-  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+  // history only while the draft is a single line — arrows navigate text otherwise
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !box.value.includes('\n')) {
     if (!conHist.length) return;
     e.preventDefault();
     if (conHistIdx === -1) {
@@ -994,12 +1001,15 @@ $('#console-input').addEventListener('keydown', e => {
     } else if (++conHistIdx >= conHist.length) {
       conHistIdx = -1;
       box.value = conDraft;
+      conResize();
       return;
     }
     box.value = conHist[conHistIdx];
+    conResize();
     return;
   }
-  if (e.key !== 'Enter') return;
+  if (e.key !== 'Enter' || e.shiftKey) return; // Shift+Enter = a new line
+  e.preventDefault();
   const sql = box.value.trim();
   if (!sql) return;
   if (conHist[conHist.length - 1] !== sql) conHist.push(sql);
@@ -1007,6 +1017,7 @@ $('#console-input').addEventListener('keydown', e => {
   conHistIdx = -1;
   conDraft = '';
   box.value = '';
+  conResize();
   // typed console statements are ad-hoc: executed but not journaled
   runScript(sql, 'console', { journal: false });
 });

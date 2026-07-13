@@ -355,6 +355,9 @@ body.split-drag { user-select: none; }
   font-family: var(--mono); font-size: .82rem;
   padding: 8px 12px;
   user-select: text;
+  resize: none; overflow-y: auto; overflow-x: hidden;
+  white-space: pre-wrap; word-break: break-word;
+  display: block; max-height: 120px;
 }
 
 /* ================= view tabs (database, grids) ================= */
