@@ -1011,6 +1011,13 @@ async function journal(source, statements) {
       if (activeTab === 'journal') setEditorText(t.content);
     }
   } catch (e) { logErr('journal write failed: ' + e); }
+  // a change from OUTSIDE the grid (builder apply, designer commit…) must
+  // show up in an open ▦ table view immediately — the grid's own edits
+  // update themselves in place and are left alone
+  if (!String(source).startsWith('grid:') && String(activeTab).startsWith('t:')) {
+    const v = $('#view-host');
+    if (v) renderViewTab(tabById(activeTab), v);
+  }
   // every journaled change re-snapshots data.sql — files stay rebuildable
   scheduleSnapshot();
 }
