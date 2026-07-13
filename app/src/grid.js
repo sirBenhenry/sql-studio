@@ -47,7 +47,18 @@ export function mountGrid(host, table, hooks) {
 
   async function load() {
     const res = await hooks.exec('SELECT * FROM `' + state.table.name + '` LIMIT ' + state.limit);
-    if (!res) return;
+    if (!res) {
+      // never leave whatever was on screen before — show the failure
+      host.textContent = '';
+      host.appendChild(el('p', 'hint pad',
+        'could not read ' + state.table.name + ' from the database — the console below has the exact error. ' +
+        '(Does the table exist in the DATABASE, not just in schema.sql?)'));
+      const retry = el('button', 'btn small', '↻ try again');
+      retry.style.marginLeft = '14px';
+      retry.addEventListener('click', load);
+      host.appendChild(retry);
+      return;
+    }
     state.columns = res.columns;
     state.rows = res.rows;
     render();

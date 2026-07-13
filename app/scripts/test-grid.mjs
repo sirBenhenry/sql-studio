@@ -145,6 +145,21 @@ ck('DELETE addressed by PK', del === 'DELETE FROM `item` WHERE `id` = 1 LIMIT 1'
   ck('dropdown hidden after pick', sug.style.display === 'none', sug.style.display);
 }
 
+// --- a failing first load must show an error, not keep the old view ---
+{
+  const hostErr = document.createElement('div');
+  hostErr.innerHTML = '<p id="stale">previous view</p>';
+  document.body.appendChild(hostErr);
+  mountGrid(hostErr, { name: 'ghost', columns: [{ name: 'id', pk: true }], fks: [] }, {
+    exec: async () => null, // the db said no
+    journal: () => {}
+  });
+  await tick(); await tick();
+  ck('stale view replaced on load failure', !hostErr.querySelector('#stale'), hostErr.innerHTML.slice(0, 80));
+  ck('failure message shown', hostErr.textContent.includes('could not read ghost'), hostErr.textContent.slice(0, 80));
+  ck('retry offered', [...hostErr.querySelectorAll('button')].some(b => b.textContent === '↻ try again'));
+}
+
 // --- read-only when no PK ---
 const host2 = document.createElement('div');
 document.body.appendChild(host2);
