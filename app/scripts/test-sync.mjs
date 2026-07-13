@@ -104,6 +104,7 @@ ck('1452 explains missing reference', /does not exist/.test(explainError('ERROR 
 ck('1048 names the column', explainError("ERROR 1048 (23000): Column 'name' cannot be null").includes("'name'"));
 ck('3819 explains checks', /allowed range/.test(explainError("ERROR 3819 (HY000): Check constraint 'u_chk_1' is violated.")));
 ck('1064 explains syntax', /typo/.test(explainError("ERROR 1064 (42000): You have an error in your SQL syntax")));
+ck('1046 explains no-database-selected', /USE <name>/.test(explainError('ERROR 1046 (3D000): No database selected')));
 ck('unknown errno stays silent', explainError('ERROR 9999 (XX000): strange') === null);
 ck('non-mysql text stays silent', explainError('journal write failed: io') === null);
 

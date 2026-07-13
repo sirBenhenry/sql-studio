@@ -243,13 +243,17 @@ export function wireBuilder(d, win, hooks) {
       label: '✓ Apply',
       title: 'execute against the project database',
       sqlSel: '#update-sql',
-      run: sql => hooks.runScript(sql, 'builder: update', { journal: true })
+      run: sql => confirmUnfiltered(sql, 'updates')
+        ? hooks.runScript(sql, 'builder: update', { journal: true })
+        : false
     },
     delete: {
       label: '✓ Apply',
       title: 'execute against the project database',
       sqlSel: '#delete-sql',
-      run: sql => hooks.runScript(sql, 'builder: delete', { journal: true })
+      run: sql => confirmUnfiltered(sql, 'deletes')
+        ? hooks.runScript(sql, 'builder: delete', { journal: true })
+        : false
     },
     // CREATE and ALTER live in the IDE's Tables designer (⊞ database tab)
   };
@@ -259,6 +263,15 @@ export function wireBuilder(d, win, hooks) {
     const m = t ? t.id.replace('tab-', '') : 'select';
     return ACTIONS[m] ? m : 'select';
   };
+
+  /* the lite tool warns about condition-less UPDATE/DELETE in a COMMENT —
+     which this shim strips. In the IDE the warning must be a real gate. */
+  function confirmUnfiltered(sql, verb) {
+    if (/\bWHERE\b/i.test(sql)) return true;
+    const tbl = (sql.match(/(?:FROM|UPDATE)\s+`?([\w$]+)`?/i) || [])[1] || 'the table';
+    return win.confirm('⚠ No condition — this ' + verb.replace(/s$/, '') +
+      ' EVERY row in ' + tbl + '.\n\nApply anyway?');
+  }
 
   /* generated SQL, comment lines stripped (placeholders/warnings) */
   const currentSQL = () => {

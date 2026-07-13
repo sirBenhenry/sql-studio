@@ -159,6 +159,8 @@ export function explainError(msg) {
       return 'That table does not exist in the live database. If it only exists in schema.sql, save the file to apply it — or check the spelling.';
     case '1049':
       return 'That database does not exist. Check the name — or create it first (CREATE DATABASE …).';
+    case '1046':
+      return 'No database is selected. Put USE <name> (or a CREATE DATABASE header) at the top of the script — or open a project whose database is already named.';
     case '1054':
       return 'No such column. Check the spelling — the schema may have changed since the query was written.';
     case '1075':

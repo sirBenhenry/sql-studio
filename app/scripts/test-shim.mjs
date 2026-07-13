@@ -242,5 +242,34 @@ d.querySelector('#tab-insert').click();
     JSON.stringify(saved));
 }
 
+// ---- condition-less DELETE/UPDATE must gate on a confirm (the lite tool's
+// warning is a comment, which the shim strips) ----
+{
+  d.querySelector('#tab-delete').click();
+  await tick(20);
+  const delSel = d.querySelector('#delete-section select') ||
+    [...d.querySelectorAll('#delete-section select, #del-table')][0];
+  // pick the table through the panel's own picker
+  const pick = [...d.querySelectorAll('#delete-section select')].find(s => [...s.options].some(o => o.value === 'member'));
+  ck('delete table picker present', !!pick);
+  pick.value = 'member';
+  pick.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await tick(20);
+  const sqlNow = d.querySelector('#delete-sql').textContent;
+  ck('unfiltered DELETE built', /DELETE\s+FROM\s+member/i.test(sqlNow), sqlNow);
+
+  calls2.length = 0;
+  window.confirm = () => false; // decline
+  d.querySelector('#ide-actionbar button.primary').click();
+  await tick(40);
+  ck('declined confirm blocks the unfiltered DELETE', !calls2.some(c => c.sql && /DELETE/i.test(c.sql)), JSON.stringify(calls2));
+
+  window.confirm = () => true; // accept
+  d.querySelector('#ide-actionbar button.primary').click();
+  await tick(40);
+  ck('accepted confirm lets it through', calls2.some(c => c.sql && /DELETE\s+FROM\s+member/i.test(c.sql)), JSON.stringify(calls2));
+  void delSel;
+}
+
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);
