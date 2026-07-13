@@ -69,4 +69,16 @@ pushed commit.
 11. **NSIS installer ships the engine** — `bundle.resources` now includes
     `resources/engine` (an installer built before this had NO MySQL in it —
     the app would ask for fetch-engine.mjs on first run); per-user install
-    mode; release build + installer produced and smoke-checked.
+    mode. Built and verified: all 53 engine files incl. mysqld.exe inside
+    `SQL Studio_0.1.0_x64-setup.exe` (20 MB — LZMA squeezes the 91 MB engine).
+12. **Query tabs manageable** — double-click renames (guarded `query_rename`
+    Rust command, file follows), ✕ closes (file stays in queries/), and
+    `+ query` checks the DISK for taken names so a closed query1's file can't
+    be clobbered.
+13. **Designer redo** — ↷ button + Ctrl+Y / Ctrl+Shift+Z; undo pushes onto a
+    redo stack, redo replays through the commit pipeline, any fresh change
+    forks history and clears redo. Found + fixed a stale-render bug (button
+    states updated before the stacks changed). 6 new tests.
+
+Final state: 7 JS suites + 3 cargo tests green; debug exe rebuilt and
+running; release installer in src-tauri/target/release/bundle/nsis/.

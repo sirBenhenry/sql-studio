@@ -39,17 +39,18 @@ function displayLit(v) {
 let uidSeq = 1;
 const uid = () => uidSeq++;
 
-/* the currently-mounted designer's undo, reachable from a document-level
-   Ctrl+Z (focus is often on body right after a commit re-render) */
+/* the currently-mounted designer's undo/redo, reachable from a document-level
+   Ctrl+Z / Ctrl+Y (focus is often on body right after a commit re-render) */
 let activeUndo = null;
+let activeRedo = null;
 if (typeof document !== 'undefined') {
   document.addEventListener('keydown', e => {
-    if (!activeUndo) return;
-    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || String(e.key).toLowerCase() !== 'z') return;
+    if (!(e.ctrlKey || e.metaKey)) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
-    e.preventDefault();
-    activeUndo();
+    const key = String(e.key).toLowerCase();
+    if (activeUndo && key === 'z' && !e.shiftKey) { e.preventDefault(); activeUndo(); }
+    else if (activeRedo && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); activeRedo(); }
   });
 }
 
@@ -364,21 +365,15 @@ export function mountTablesDesigner(host, schema, hooks) {
   let committing = false;
   let commitTimer = null;
 
-  /* ---------- undo: snapshots of every committed state (this session) ---------- */
+  /* ---------- undo/redo: snapshots of every committed state (this session) ---------- */
   const snap = () => JSON.parse(JSON.stringify(model));
   const history = [snap()];
+  const redoStack = [];
   let undoing = false;
 
-  async function undo() {
-    if (committing) return;
-    if (history.length < 2) {
-      if (hooks.toast) hooks.toast('Nothing to undo (in this session).');
-      return;
-    }
-    const current = history[history.length - 1];
-    const target = history[history.length - 2];
-    // live model = the PAST state, diffed against the PRESENT as baseline —
-    // the normal commit pipeline (fixups, confirms, journal) does the rest
+  /** the TARGET snapshot as a live model diffed against CURRENT as baseline —
+   *  the normal commit pipeline (fixups, confirms, journal) does the rest */
+  function stateAsLive(target, current) {
     const curT = {};
     for (const t of current) curT[t._uid] = t;
     const next = [];
@@ -414,29 +409,62 @@ export function mountTablesDesigner(host, schema, hooks) {
       }
       next.push(tt);
     }
-    model = next;
+    return next;
+  }
+
+  async function timeTravel(target, current, reason) {
+    model = stateAsLive(target, current);
     snapshotNames = current.map(t => t.origName).filter(Boolean);
-    history.pop();
     undoing = true;
+    let ok = false;
     try {
       render();
-      await commit('undo');
+      ok = await commit(reason);
     } finally {
       undoing = false;
     }
-    render(); // refresh the undo button state
+    render(); // refresh button states
+    return ok;
+  }
+
+  async function undo() {
+    if (committing) return;
+    if (history.length < 2) {
+      if (hooks.toast) hooks.toast('Nothing to undo (in this session).');
+      return;
+    }
+    const popped = history.pop();
+    const ok = await timeTravel(history[history.length - 1], popped, 'undo');
+    if (ok) redoStack.push(popped);
+    else history.push(popped); // DB said no — the state is still current
+    render(); // the stacks changed after timeTravel's render
+  }
+
+  async function redo() {
+    if (committing) return;
+    if (!redoStack.length) {
+      if (hooks.toast) hooks.toast('Nothing to redo.');
+      return;
+    }
+    const target = redoStack[redoStack.length - 1];
+    const ok = await timeTravel(target, history[history.length - 1], 'redo');
+    if (ok) {
+      redoStack.pop();
+      history.push(snap());
+    }
+    render(); // the stacks changed after timeTravel's render
   }
 
   /* ---------- semi-live commit ---------- */
 
   async function commit(reason) {
-    if (committing) return;
+    if (committing) return false;
     const { stmts, destructive, fixups } = computeDiff(model, snapshotNames);
-    if (!stmts.length && !fixups.length) return;
+    if (!stmts.length && !fixups.length) return true; // nothing to do IS success
     if (destructive.length &&
         !window.confirm('This will permanently:\n  · ' + destructive.join('\n  · ') + '\n\nContinue?')) {
       reload(); // revert the cards to the committed state
-      return;
+      return false;
     }
     committing = true;
     try {
@@ -503,13 +531,16 @@ export function mountTablesDesigner(host, schema, hooks) {
         if (!undoing) {
           history.push(snap());
           if (history.length > 100) history.shift();
+          redoStack.length = 0; // a fresh change forks history — redo dies
         }
         render();
+        return true;
       } else {
         // DB said no. If some statements DID apply, the file no longer
         // matches the database — re-derive it from DB truth before reverting.
         if (partial > 0 && hooks.syncFromDb) await hooks.syncFromDb();
         reload(); // revert cards to reality
+        return false;
       }
     } finally {
       committing = false;
@@ -533,11 +564,15 @@ export function mountTablesDesigner(host, schema, hooks) {
   host.addEventListener('focusout', () => scheduleCommit('edit'));
   host.addEventListener('focusin', cancelScheduled);
 
-  /* Ctrl+Z anywhere (outside a text field, where it stays native) undoes
-     the last applied change while this designer is on screen */
+  /* Ctrl+Z / Ctrl+Y anywhere (outside a text field, where they stay native)
+     while this designer is on screen */
   activeUndo = () => {
     const doc = host.ownerDocument;
     if (doc && doc.body && doc.body.contains(host)) undo();
+  };
+  activeRedo = () => {
+    const doc = host.ownerDocument;
+    if (doc && doc.body && doc.body.contains(host)) redo();
   };
 
   /* ---------- rendering ---------- */
@@ -851,6 +886,11 @@ export function mountTablesDesigner(host, schema, hooks) {
     undoBtn.disabled = history.length < 2;
     undoBtn.addEventListener('click', () => undo());
     bar.appendChild(undoBtn);
+    const redoBtn = el('button', 'btn small', '↷ redo');
+    redoBtn.title = 'redo what you just undid (Ctrl+Y)';
+    redoBtn.disabled = !redoStack.length;
+    redoBtn.addEventListener('click', () => redo());
+    bar.appendChild(redoBtn);
     const addT = el('button', 'btn small primary', '+ add table');
     addT.addEventListener('click', async () => {
       cancelScheduled();

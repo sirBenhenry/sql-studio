@@ -534,6 +534,27 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   undoBtn().click();
   await tick(400);
   ck('undo drops the added column', ranU.some(s => s.includes('DROP COLUMN `extra`')), JSON.stringify(ranU));
+
+  // ---- redo brings it back; a fresh edit kills the redo ----
+  const redoBtn = () => [...hostU.querySelectorAll('button')].find(b => b.textContent === '↷ redo');
+  ck('redo enabled after an undo', !redoBtn().disabled);
+  ranU.length = 0;
+  redoBtn().click();
+  await tick(400);
+  ck('redo re-adds the column', ranU.some(s => s.includes('ADD `extra`')), JSON.stringify(ranU));
+  ck('redo consumed', redoBtn().disabled);
+  ck('undo re-enabled after redo', !undoBtn().disabled);
+
+  // undo again (drops extra), then a FRESH edit must clear the redo stack
+  undoBtn().click();
+  await tick(400);
+  ck('redo available again', !redoBtn().disabled);
+  const lIn2 = [...hostU.querySelectorAll('.dz-cname')].find(i => i.value === 'label');
+  lIn2.value = 'title2';
+  lIn2.dispatchEvent(new window.Event('input', { bubbles: true }));
+  hostU.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('a fresh change forks history — redo dies', redoBtn().disabled);
 }
 
 // ---- diffModels: the file→DB direction (Ctrl+S on schema.sql) ----
