@@ -505,7 +505,9 @@ function renderDbTab(host) {
       syncFromDb: syncSchemaFromDb,
       openTable: openTableGrid,
       reload: () => { if (activeTab === 'db') renderDbTab(host); },
-      toast
+      toast,
+      // undo survives View↔Edit flips; the tour demo gets its own lane
+      historyKey: project ? project.root + (tourDemo ? '#demo' : '') : null
     });
   }
 }

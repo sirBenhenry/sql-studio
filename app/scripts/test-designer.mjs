@@ -604,5 +604,114 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
     JSON.stringify(d4.fixups.concat(d4.stmts)));
 }
 
+// ---- undo history survives a remount (View↔Edit flip) ----
+{
+  const mkSchema = () => parseSchema('CREATE TABLE r1 (id INT UNSIGNED NOT NULL AUTO_INCREMENT, label VARCHAR(30) NOT NULL, PRIMARY KEY(id));');
+  const ranR = [];
+  const hooksR = {
+    runScript: async sql => { ranR.push(sql); return true; },
+    writeSchema: async () => {}, openTable: () => {}, reload: () => {}, toast: () => {},
+    historyKey: 'C:/fake/project'
+  };
+  const hostR1 = document.createElement('div');
+  document.body.appendChild(hostR1);
+  mountTablesDesigner(hostR1, mkSchema(), hooksR);
+  const lIn = [...hostR1.querySelectorAll('.dz-cname')].find(i => i.value === 'label');
+  lIn.value = 'tag_name';
+  lIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  hostR1.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await tick(400);
+  ck('remount test: rename committed', ranR.some(s => s.includes('CHANGE `label` `tag_name`')));
+  hostR1.remove();
+
+  // remount with the COMMITTED schema (as schema.sql would now parse)
+  const hostR2 = document.createElement('div');
+  document.body.appendChild(hostR2);
+  mountTablesDesigner(hostR2,
+    parseSchema('CREATE TABLE r1 (id INT UNSIGNED NOT NULL AUTO_INCREMENT, tag_name VARCHAR(30) NOT NULL, PRIMARY KEY(id));'),
+    hooksR);
+  const undoR = [...hostR2.querySelectorAll('button')].find(b => b.textContent === '↶ undo');
+  ck('history survives the remount (undo enabled)', !undoR.disabled);
+  ranR.length = 0;
+  undoR.click();
+  await tick(400);
+  ck('undo across remount reverses the rename', ranR.some(s => s.includes('CHANGE `tag_name` `label`')), JSON.stringify(ranR));
+  hostR2.remove();
+
+  // remount with a DIFFERENT schema (changed outside the designer) → reset
+  const hostR3 = document.createElement('div');
+  document.body.appendChild(hostR3);
+  mountTablesDesigner(hostR3,
+    parseSchema('CREATE TABLE r1 (id INT UNSIGNED NOT NULL AUTO_INCREMENT, other VARCHAR(9), PRIMARY KEY(id));'),
+    hooksR);
+  const undoR3 = [...hostR3.querySelectorAll('button')].find(b => b.textContent === '↶ undo');
+  ck('external schema change resets the history', undoR3.disabled);
+  hostR3.remove();
+}
+
+// ---- round-trip fuzz: model → createTableDDL → parseSchema → model must
+// survive structurally (this exact invariant broke twice: the truncated
+// (CURDATE()) capture and DEFAULT 3.50 → 3) ----
+{
+  // deterministic PRNG — failures must reproduce
+  let seed = 42;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = a => a[Math.floor(rnd() * a.length)];
+  const TYPES_F = ['INT', 'TINYINT', 'BIGINT', 'DECIMAL', 'VARCHAR', 'CHAR', 'TEXT', 'DATE', 'DATETIME', 'BOOLEAN'];
+  const ARGS_F = { DECIMAL: ['6,2', '4,1', '10,3'], VARCHAR: ['20', '255', '80'], CHAR: ['2', '10'] };
+  const DEFAULTS = { INT: ['0', '42', '-5'], TINYINT: ['1'], BIGINT: ['9000'], DECIMAL: ['3.50', '0.99'],
+    VARCHAR: ["it's fine", 'plain', 'x_y'], CHAR: ['ab'], DATE: ['CURDATE()'], DATETIME: ['NOW()'], BOOLEAN: ['TRUE'] };
+
+  let fuzzFails = 0;
+  for (let i = 0; i < 60 && fuzzFails < 3; i++) {
+    const nCols = 2 + Math.floor(rnd() * 5);
+    const t = { name: 'fz' + i, cols: [], fks: [], extras: [] };
+    t.cols.push({ name: 'id', type: 'INT', args: '', uns: true, nn: true, ai: true, pk: true, uq: false, def: '', chkMin: '', chkMax: '', rawCheck: '' });
+    for (let c = 1; c < nCols; c++) {
+      const ty = pick(TYPES_F);
+      const col = {
+        name: 'c' + c, type: ty, args: ARGS_F[ty] ? pick(ARGS_F[ty]) : '',
+        uns: /INT|DECIMAL/.test(ty) && rnd() < 0.3,
+        nn: rnd() < 0.5, ai: false, pk: false,
+        uq: ty !== 'TEXT' && rnd() < 0.25,
+        def: ty !== 'TEXT' && rnd() < 0.4 ? pick(DEFAULTS[ty] || ['1']) : '',
+        chkMin: '', chkMax: '', rawCheck: ''
+      };
+      if (/^(INT|TINYINT|BIGINT|DECIMAL)$/.test(ty) && rnd() < 0.3) { col.chkMin = '0'; col.chkMax = '999'; }
+      t.cols.push(col);
+    }
+    const ddl = createTableDDL(t) + ';';
+    let back;
+    try { back = modelFromSchema(parseSchema(ddl)); } catch (e) { fuzzFails++; console.log('FAIL: fuzz parse crash #' + i, e.message, '\n', ddl); continue; }
+    const bt = back[0];
+    if (!bt || bt.cols.length !== t.cols.length) {
+      fuzzFails++; console.log('FAIL: fuzz column count #' + i, bt && bt.cols.length, 'vs', t.cols.length, '\n', ddl);
+      continue;
+    }
+    for (let c = 0; c < t.cols.length; c++) {
+      const a = t.cols[c], b = bt.cols[c];
+      const norm = v => String(v || '').trim().toUpperCase().replace(/^\((.*)\)$/, '$1')
+        .replace(/^NOW\(\)$/, 'CURRENT_TIMESTAMP'); // emitted canonically — same meaning
+      const diffs = [];
+      if (a.name !== b.name) diffs.push('name');
+      if (a.type !== b.type) diffs.push('type ' + a.type + '→' + b.type);
+      if (String(a.args) !== String(b.args)) diffs.push('args ' + a.args + '→' + b.args);
+      if (!!a.uns !== !!b.uns) diffs.push('uns');
+      if (!!a.nn !== !!b.nn) diffs.push('nn');
+      if (!!a.pk !== !!b.pk) diffs.push('pk');
+      if (!!a.uq !== !!b.uq) diffs.push('uq');
+      if (norm(a.def) !== norm(b.def)) diffs.push('def "' + a.def + '"→"' + b.def + '"');
+      if (String(a.chkMin) !== String(b.chkMin) || String(a.chkMax) !== String(b.chkMax)) diffs.push('range');
+      if (diffs.length) {
+        fuzzFails++;
+        console.log('FAIL: fuzz round-trip #' + i + ' col ' + a.name + ': ' + diffs.join(', ') + '\n' + ddl);
+        break;
+      }
+    }
+  }
+  ck('fuzz: 60 random models round-trip losslessly', fuzzFails === 0, fuzzFails + ' failures');
+  if (fuzzFails) fail += 0; // the individual logs already counted via ck
+}
+
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);

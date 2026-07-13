@@ -39,6 +39,27 @@ function displayLit(v) {
 let uidSeq = 1;
 const uid = () => uidSeq++;
 
+/* undo/redo histories keyed by hooks.historyKey (the project root): flipping
+   View↔Edit remounts the designer, and Ctrl+Z must survive that. A stored
+   history is only adopted when its last committed snapshot still matches the
+   incoming schema — anything changed the designer didn't do resets it. */
+const historyStore = new Map();
+const HISTORY_KEYS_MAX = 8;
+
+/** structural identity, ignoring bookkeeping (_uid/orig/_open/_redo) */
+function stripForCompare(model) {
+  return model.map(t => ({
+    name: t.name, origName: t.origName, extras: t.extras || [],
+    fks: (t.fks || []).map(f => ({ col: f.col, refTable: f.refTable, refCol: f.refCol, onUpdate: f.onUpdate || null, onDelete: f.onDelete || null })),
+    cols: t.cols.map(c => ({
+      name: c.name, type: c.type, args: String(c.args || ''),
+      uns: !!c.uns, nn: !!c.nn, ai: !!c.ai, pk: !!c.pk, uq: !!c.uq,
+      def: String(c.def || ''), chkMin: String(c.chkMin || ''), chkMax: String(c.chkMax || ''),
+      rawCheck: String(c.rawCheck || '')
+    }))
+  }));
+}
+
 /* the currently-mounted designer's undo/redo, reachable from a document-level
    Ctrl+Z / Ctrl+Y (focus is often on body right after a commit re-render) */
 let activeUndo = null;
@@ -358,17 +379,40 @@ export async function resolveFixups(fixups, query) {
 
 export function mountTablesDesigner(host, schema, hooks) {
   // hooks: { runScript(sql, source, opts)->Promise<bool>, writeSchema(model),
-  //          openTable(name), toast(msg) }
+  //          openTable(name), toast(msg), historyKey? (undo survives remounts) }
   let model = modelFromSchema(schema);
   for (const t of model) t.origCols = t.cols.map(c => c.orig.name);
   let snapshotNames = model.map(t => t.origName);
   let committing = false;
   let commitTimer = null;
 
-  /* ---------- undo/redo: snapshots of every committed state (this session) ---------- */
+  /* ---------- undo/redo: snapshots of every committed state ---------- */
   const snap = () => JSON.parse(JSON.stringify(model));
-  const history = [snap()];
-  const redoStack = [];
+  let history, redoStack;
+  {
+    const key = hooks.historyKey;
+    const stored = key ? historyStore.get(key) : null;
+    const matches = stored &&
+      JSON.stringify(stripForCompare(stored.history[stored.history.length - 1])) ===
+      JSON.stringify(stripForCompare(model));
+    if (matches) {
+      // same committed state → adopt the stored lineage (uids stay coherent)
+      model = JSON.parse(JSON.stringify(stored.history[stored.history.length - 1]));
+      snapshotNames = model.map(t => t.origName).filter(Boolean);
+      history = stored.history;
+      redoStack = stored.redoStack;
+    } else {
+      history = [snap()];
+      redoStack = [];
+      if (key) {
+        historyStore.set(key, { history, redoStack });
+        // a light cap — sessions rarely touch more than a couple of projects
+        while (historyStore.size > HISTORY_KEYS_MAX) {
+          historyStore.delete(historyStore.keys().next().value);
+        }
+      }
+    }
+  }
   let undoing = false;
 
   /** the TARGET snapshot as a live model diffed against CURRENT as baseline —
