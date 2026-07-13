@@ -1530,6 +1530,8 @@ wireSplitter('#splitter-h', '--console-h', true);
 try {
   const appWindow = window.__TAURI__.window.getCurrentWindow();
   appWindow.onCloseRequested(async event => {
+    // a tour abandoned by closing the app must not leave its demo db behind
+    if (tourDemo) await endTourDemo();
     const dirty = tabs.filter(t =>
       t.kind !== 'view' && !t.readonly && t.content !== t.savedContent &&
       !(tourDemo && t.id === 'schema'));

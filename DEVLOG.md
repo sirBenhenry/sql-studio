@@ -171,6 +171,14 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
     folder and your arranged diagram comes along — matching the product's
     core promise.
 
+## Round 11 — loose ends
+
+33. **Tour demo can't linger** — closing the app mid-tour now drops the demo
+    library before the window goes (onCloseRequested), so an abandoned tour
+    leaves no `library` db in the sandbox.
+34. **Engine download URL verified alive** (200 via cdn.mysql.com — no rot;
+    checked, no change needed).
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much
