@@ -58,6 +58,15 @@ ck('correlated subquery generates',
 ck('DELETE generator',
   T(G.generateDeleteSegments({ table: 'loan', where: [{ col: 'id', op: 'eq', v1: '5' }] }, S)) === 'DELETE FROM loan\nWHERE id = 5;');
 
+// string escaping: backslashes must double (MySQL default sql_mode) and
+// quotes must double — 'C:\tmp' once stored a TAB
+const insEsc = T(G.generateInsertSegments({
+  table: 'book', cols: ['title'],
+  rows: [{ title: "C:\\tmp says 'hi'" }]
+}, S));
+ck('literals escape backslashes and quotes',
+  insEsc.includes("('C:\\\\tmp says ''hi''')"), insEsc);
+
 // FK-by-name into ANOTHER table: stays a plain scalar subquery
 const insOther = T(G.generateInsertSegments({
   table: 'loan', cols: ['book_id'],

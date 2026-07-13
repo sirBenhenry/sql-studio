@@ -109,7 +109,9 @@
   }
 
   function escStr(v) {
-    return String(v).replace(/'/g, "''");
+    // backslashes are escapes in MySQL's default sql_mode — 'C:\tmp' would
+    // store a TAB without the doubling
+    return String(v).replace(/\\/g, '\\\\').replace(/'/g, "''");
   }
 
   function aggAlias(item) {

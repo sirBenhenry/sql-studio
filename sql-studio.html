@@ -1571,7 +1571,9 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
   }
 
   function escStr(v) {
-    return String(v).replace(/'/g, "''");
+    // backslashes are escapes in MySQL's default sql_mode — 'C:\tmp' would
+    // store a TAB without the doubling
+    return String(v).replace(/\\/g, '\\\\').replace(/'/g, "''");
   }
 
   function aggAlias(item) {
