@@ -141,6 +141,13 @@ pub async fn file_read(state: tauri::State<'_, ProjectState>, rel: String) -> Re
     fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
+/// Read a user-picked file for import (the path comes from the native file
+/// dialog — outside the project on purpose, read-only).
+#[tauri::command]
+pub async fn import_read(path: String) -> Result<String, String> {
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn journal_append(state: tauri::State<'_, ProjectState>, entry: String) -> Result<(), String> {
     let root = current_root(&state)?;

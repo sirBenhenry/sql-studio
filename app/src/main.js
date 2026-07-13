@@ -89,6 +89,11 @@ function wireSettingsUI() {
     else toast('Open a project first — the tour walks through a real workspace.');
   });
 
+  $('#set-import').addEventListener('click', async () => {
+    openClose(false);
+    await importDump();
+  });
+
   $('#set-rowlimit').addEventListener('change', e => {
     const n = parseInt(e.target.value, 10);
     SETTINGS.rowLimit = Number.isFinite(n) ? Math.min(Math.max(n, 10), 10000) : DEFAULT_SETTINGS.rowLimit;
@@ -890,6 +895,41 @@ $('#console-input').addEventListener('keydown', e => {
   // typed console statements are ad-hoc: executed but not journaled
   runScript(sql, 'console', { journal: false });
 });
+
+/* ================= import a .sql dump ================= */
+
+/** Settings → import: run a picked .sql file against the project database,
+ *  then regenerate schema.sql + data.sql from DB truth. The journal gets a
+ *  single import note (the snapshot owns the data — journaling ten thousand
+ *  INSERTs would just duplicate it). */
+async function importDump() {
+  if (!project) { toast('Open a project first.'); return; }
+  if (!engineRunning) { toast('The engine is not running.'); return; }
+  if (tourDemo) { toast('Finish the tour first.'); return; }
+  const path = await openDialog({
+    title: 'Pick a .sql dump to import',
+    filters: [{ name: 'SQL', extensions: ['sql'] }]
+  });
+  if (!path) return;
+  let text;
+  try { text = await invoke('import_read', { path }); }
+  catch (e) { toast(String(e)); return; }
+  const stmts = splitSQL(text);
+  if (!stmts.length) { toast('No SQL statements found in that file.'); return; }
+  const fname = String(path).split(/[\\/]/).pop();
+  if (!window.confirm('Import ' + fname + '?\n\n' + stmts.length + ' statement' + (stmts.length === 1 ? '' : 's') +
+    ' will run against this project\'s live database.\nTables with the same names may conflict.\n\n' +
+    'Afterwards schema.sql and data.sql are regenerated from the database.')) return;
+  logNote('importing ' + fname + ' (' + stmts.length + ' statements)…');
+  const ok = await runScript(text, 'import: ' + fname, { journal: false });
+  // whatever happened, the files must mirror what the DB is NOW
+  await syncSchemaFromDb();
+  await snapshotData();
+  await journal('import: ' + fname, ['-- imported ' + stmts.length + ' statements from ' + fname]);
+  if (activeTab === 'db') { const v = $('#view-host'); if (v) renderDbTab(v); }
+  if (ok) { logOk('import complete — files regenerated from the database'); toast(fname + ' imported'); }
+  else logErr('import stopped at the first failing statement — files re-synced to what actually applied');
+}
 
 /* ================= onboarding tour ================= */
 
