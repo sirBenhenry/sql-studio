@@ -50,6 +50,11 @@ const HIDE_CSS = `
   .mode-tab span { display: none !important; }
 
   .workbench { grid-template-columns: 1fr !important; gap: 0 !important; }
+  /* grid items default to min-width:auto — one unbroken line (e.g. the
+     applied-history SQL) would silently widen the whole column past the
+     pane and clip every row. Never let content dictate the pane width. */
+  .workbench > * { min-width: 0 !important; }
+  #ide-applied { min-width: 0; max-width: 100%; }
 
   /* no sideways scrolling inside the pane; slim scrollbars */
   html, body { overflow-x: hidden !important; }

@@ -195,6 +195,10 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
+/* while a splitter drags, the iframe must not swallow the mouse */
+body.split-drag iframe { pointer-events: none; }
+body.split-drag { user-select: none; }
+
 /* subtle "the builder re-read the schema" flash */
 #builder-sync {
   font-weight: 400; letter-spacing: .02em; text-transform: none;

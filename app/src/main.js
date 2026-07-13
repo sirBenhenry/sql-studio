@@ -865,9 +865,16 @@ function wireSplitter(elSel, cssVar, horizontal) {
   s.addEventListener('mousedown', e => {
     e.preventDefault(); // don't select text while resizing
     dragging = true;
+    // the builder iframe swallows mousemove — without this, the splitter
+    // freezes the moment the pointer crosses into it (i.e. when shrinking)
+    document.body.classList.add('split-drag');
     document.body.style.cursor = horizontal ? 'row-resize' : 'col-resize';
   });
-  window.addEventListener('mouseup', () => { dragging = false; document.body.style.cursor = ''; });
+  window.addEventListener('mouseup', () => {
+    dragging = false;
+    document.body.classList.remove('split-drag');
+    document.body.style.cursor = '';
+  });
   window.addEventListener('mousemove', e => {
     if (!dragging) return;
     const ws = $('#workspace').getBoundingClientRect();
