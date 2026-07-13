@@ -554,6 +554,8 @@ function setEngineStatus(text, cls) {
 async function runStatement(sql) {
   const useM = sql.match(/^USE\s+`?([\w$]+)`?\s*$/i);
   if (useM) {
+    // let the server verify it — a typo must error, not poison currentDb
+    await invoke('db_exec', { sql, db: null });
     currentDb = useM[1];
     logOk('database: ' + currentDb);
     return { columns: [], rows: [], affected: 0, elapsed_ms: 0 };
@@ -726,7 +728,15 @@ async function reconcile() {
       }
       if (ok) logOk('project database built from files');
     } else {
-      currentDb = findCurrentDb(schemaText) || userDbs[0] || null;
+      const headerDb = findCurrentDb(schemaText);
+      if (headerDb && !userDbs.includes(headerDb) && userDbs.length) {
+        // the file names a database the sandbox doesn't have — say so
+        logErr('schema.sql names database "' + headerDb + '", but the sandbox has: ' +
+          userDbs.join(', ') + ' — using ' + userDbs[0]);
+        currentDb = userDbs[0];
+      } else {
+        currentDb = (headerDb && userDbs.includes(headerDb)) ? headerDb : (headerDb || userDbs[0] || null);
+      }
       if (currentDb) logNote('database: ' + currentDb);
     }
   } catch (e) {
@@ -1211,6 +1221,23 @@ wireSplitter('#splitter-v', '--builder-w', false);
 wireSplitter('#splitter-h', '--console-h', true);
 
 /* ================= boot ================= */
+
+/* closing with unsaved edits asks first (dirty = content ≠ savedContent;
+   view tabs and the tour demo don't count) */
+try {
+  const appWindow = window.__TAURI__.window.getCurrentWindow();
+  appWindow.onCloseRequested(async event => {
+    const dirty = tabs.filter(t =>
+      t.kind !== 'view' && !t.readonly && t.content !== t.savedContent &&
+      !(tourDemo && t.id === 'schema'));
+    if (!dirty.length) return;
+    const stay = !(await window.__TAURI__.dialog.ask(
+      dirty.map(t => '· ' + t.label).join('\n') + '\n\nClose anyway? Unsaved edits are lost.',
+      { title: 'Unsaved changes', kind: 'warning', okLabel: 'Close anyway', cancelLabel: 'Keep working' }
+    ));
+    if (stay) event.preventDefault();
+  });
+} catch { /* window API unavailable (tests) — no guard */ }
 
 $('#btn-new-project').addEventListener('click', newProject);
 $('#btn-open-project').addEventListener('click', openProject);
