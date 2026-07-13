@@ -540,6 +540,35 @@ mod tests {
         let sc2: Vec<(String, String)> = conn.query("SHOW CREATE TABLE dt").unwrap();
         assert!(sc2[0].1.contains("DEFAULT (curdate())"), "expression default echoes lowercase in parens: {}", sc2[0].1);
 
+        // --- the data.sql replay shape: FK checks suspended on ONE
+        // connection lets a self-reference to a HIGHER id rebuild ---
+        conn.query_drop("CREATE DATABASE replaydb").unwrap();
+        conn.query_drop("USE replaydb").unwrap();
+        conn.query_drop(
+            "CREATE TABLE member (id INT UNSIGNED NOT NULL AUTO_INCREMENT, \
+             invited_by INT UNSIGNED, PRIMARY KEY(id), \
+             FOREIGN KEY(invited_by) REFERENCES member(id))",
+        )
+        .unwrap();
+        let replay = [
+            "SET FOREIGN_KEY_CHECKS = 0",
+            "INSERT INTO `member` (`id`, `invited_by`) VALUES (1, 3), (2, 1), (3, NULL)",
+            "SET FOREIGN_KEY_CHECKS = 1",
+        ];
+        let (applied, err) = run_batch(
+            &mut conn,
+            &replay.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+        assert_eq!((applied, err), (3, None), "forward-referencing self-FK replays");
+        let inv: Vec<Option<u32>> = conn
+            .query("SELECT invited_by FROM member ORDER BY id")
+            .unwrap();
+        assert_eq!(inv, vec![Some(3), Some(1), None]);
+        // and the checks are really back on afterwards
+        assert!(conn
+            .query_drop("INSERT INTO member (invited_by) VALUES (999)")
+            .is_err());
+
         drop(conn);
         let mut e = Engine { child: Some(child), port, pool: Some(pool), lock_path: None };
         e.shutdown();
