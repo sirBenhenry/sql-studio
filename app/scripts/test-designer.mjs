@@ -611,6 +611,15 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   ck('BOOLEAN≡tinyint(1), INTEGER≡int(11) — no phantom MODIFY',
     d5.stmts.length === 0 && d5.fixups.length === 0,
     JSON.stringify(d5.stmts.concat(d5.fixups)));
+
+  // default spellings: user's uppercase (CURDATE()) vs MySQL's (curdate()),
+  // TRUE vs '1', 3.50 vs '3.50' — none may diff
+  const d6 = diffModels(
+    file("CREATE TABLE dd (id INT UNSIGNED NOT NULL AUTO_INCREMENT, j DATE NOT NULL DEFAULT (CURDATE()), ok BOOLEAN NOT NULL DEFAULT TRUE, p DECIMAL(4,2) DEFAULT 3.50, PRIMARY KEY(id));"),
+    file("CREATE TABLE dd (id INT UNSIGNED NOT NULL AUTO_INCREMENT, j DATE NOT NULL DEFAULT (curdate()), ok TINYINT(1) NOT NULL DEFAULT '1', p DECIMAL(4,2) DEFAULT '3.50', PRIMARY KEY(id));"));
+  ck('default spellings canonicalized — no phantom MODIFY',
+    d6.stmts.length === 0 && d6.fixups.length === 0,
+    JSON.stringify(d6.stmts.concat(d6.fixups)));
 }
 
 // ---- undo history survives a remount (View↔Edit flip) ----

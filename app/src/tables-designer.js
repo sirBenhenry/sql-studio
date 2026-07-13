@@ -128,10 +128,36 @@ function canonType(type, args) {
   return t + '(' + a + ')';
 }
 
+/** a DEFAULT in comparable form — MySQL echoes expression defaults lowercase
+ *  in parens ((curdate())), booleans as '1'/'0', and decimals quoted; all of
+ *  those must compare equal to what the user typed or every file→DB diff
+ *  would re-emit the same MODIFY forever */
+function canonDef(d) {
+  d = String(d || '').trim();
+  if (!d) return '';
+  let expr = d;
+  let wasParen = false;
+  while (/^\(.*\)$/.test(expr) && parensBalanced(expr.slice(1, -1))) {
+    expr = expr.slice(1, -1).trim();
+    wasParen = true;
+  }
+  const up = expr.toUpperCase().replace(/\s+/g, '');
+  if (/^(NOW\(\)|CURRENT_TIMESTAMP(\(\))?)$/.test(up)) return 'CURRENT_TIMESTAMP';
+  if (/^(CURDATE\(\)|CURRENT_DATE(\(\))?)$/.test(up)) return 'CURDATE()';
+  if (/^(CURTIME\(\)|CURRENT_TIME(\(\))?)$/.test(up)) return 'CURTIME()';
+  if (up === 'TRUE') return '1';
+  if (up === 'FALSE') return '0';
+  if (up === 'NULL') return '';
+  if (/^-?\d+(\.\d+)?$/.test(expr)) return String(parseFloat(expr)); // 3.50 ≡ '3.50' ≡ 3.5
+  // unknown parenthesized expressions: case-insensitive (they're functions);
+  // plain string literals: exact
+  return wasParen ? '(' + up + ')' : d;
+}
+
 function sameCol(a, b) {
   return canonType(a.type, a.args) === canonType(b.type, b.args) &&
     !!a.uns === !!b.uns && !!a.nn === !!b.nn && !!a.ai === !!b.ai && !!a.uq === !!b.uq &&
-    String(a.def || '') === String(b.def || '') &&
+    canonDef(a.def) === canonDef(b.def) &&
     String(a.chkMin || '') === String(b.chkMin || '') &&
     String(a.chkMax || '') === String(b.chkMax || '') &&
     String(a.rawCheck || '') === String(b.rawCheck || '');
