@@ -19,6 +19,7 @@ pub fn run() {
             project::file_write,
             project::journal_append,
             project::import_read,
+            project::query_rename,
             engine::db_start,
             engine::db_stop,
             engine::db_status,

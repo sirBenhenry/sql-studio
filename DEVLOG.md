@@ -57,3 +57,16 @@ test suites green and a commit.
 
 All 7 JS suites green after every step; cargo check clean; each item its own
 pushed commit.
+
+## Round 2 (same session, continuing)
+
+10. **Batch execution + mutex fix** — `db_exec_batch` runs a whole statement
+    list on one connection (USE persists, first-failure stop, applied count;
+    semantics pinned in the real-engine cargo test). Seeds/imports use it via
+    `runScriptFast`: one IPC round-trip per script instead of per statement.
+    `db_exec`/`db_exec_batch` clone the pool and release the engine mutex
+    before querying — a slow query no longer blocks db_status/shutdown.
+11. **NSIS installer ships the engine** — `bundle.resources` now includes
+    `resources/engine` (an installer built before this had NO MySQL in it —
+    the app would ask for fetch-engine.mjs on first run); per-user install
+    mode; release build + installer produced and smoke-checked.

@@ -148,6 +148,25 @@ pub async fn import_read(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// Rename a saved query file (queries/*.sql only — resolve() guards both ends).
+#[tauri::command]
+pub async fn query_rename(
+    state: tauri::State<'_, ProjectState>,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    let root = current_root(&state)?;
+    if !from.starts_with("queries/") || !to.starts_with("queries/") {
+        return Err("only saved queries can be renamed".into());
+    }
+    let src = resolve(&root, &from)?;
+    let dst = resolve(&root, &to)?;
+    if dst.exists() {
+        return Err("a query with that name already exists".into());
+    }
+    fs::rename(src, dst).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn journal_append(state: tauri::State<'_, ProjectState>, entry: String) -> Result<(), String> {
     let root = current_root(&state)?;

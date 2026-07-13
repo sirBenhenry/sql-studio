@@ -198,7 +198,7 @@ function enterProject(p) {
     { id: 'journal', label: 'journal.sql', rel: 'journal.sql', content: p.journal, savedContent: p.journal, readonly: true },
     ...p.queries.map(q => ({
       id: 'q:' + q.name, label: q.name + '.sql', rel: 'queries/' + q.name + '.sql',
-      content: q.content, savedContent: q.content, readonly: false
+      content: q.content, savedContent: q.content, readonly: false, closable: true
     }))
   ];
   activateTab('schema');
@@ -253,10 +253,15 @@ function renderTabs() {
     if (t.kind !== 'view' && t.content !== t.savedContent) b.appendChild(el('span', 'dirty', '●'));
     if (t.closable) {
       const x = el('span', 'tab-x', '✕');
+      x.title = t.id.startsWith('q:') ? 'close (the file stays in queries/)' : 'close';
       x.addEventListener('click', e => { e.stopPropagation(); closeTab(t.id); });
       b.appendChild(x);
     }
     b.addEventListener('click', () => activateTab(t.id));
+    if (t.id.startsWith('q:')) {
+      b.title = 'double-click to rename';
+      b.addEventListener('dblclick', () => renameQueryTab(t));
+    }
     bar.appendChild(b);
   }
   const add = el('button', 'ftab add-tab', '+ query');
@@ -569,14 +574,39 @@ async function saveActive() {
   } catch (e) { toast(String(e)); }
 }
 
+async function renameQueryTab(t) {
+  const cur = t.id.slice(2);
+  const raw = window.prompt('Rename ' + t.label + ' to…', cur);
+  if (raw == null) return;
+  const name = raw.trim().replace(/\.sql$/i, '').replace(/[^\w$-]+/g, '_');
+  if (!name || name === cur) return;
+  const newRel = 'queries/' + name + '.sql';
+  try {
+    await invoke('query_rename', { from: t.rel, to: newRel });
+  } catch (e) { toast(String(e)); return; }
+  const wasActive = activeTab === t.id;
+  t.id = 'q:' + name;
+  t.label = name + '.sql';
+  t.rel = newRel;
+  if (wasActive) activeTab = t.id;
+  renderTabs();
+  toast('renamed to ' + t.label);
+}
+
 async function newQueryTab() {
   const base = 'query';
   let n = 1;
-  while (tabs.some(t => t.id === 'q:' + base + n)) n++;
+  // a closed tab's file still exists on disk — never clobber it
+  const taken = async name => {
+    if (tabs.some(t => t.id === 'q:' + name)) return true;
+    try { await invoke('file_read', { rel: 'queries/' + name + '.sql' }); return true; }
+    catch { return false; }
+  };
+  while (await taken(base + n)) n++;
   const name = base + n;
   const t = {
     id: 'q:' + name, label: name + '.sql', rel: 'queries/' + name + '.sql',
-    content: '-- ' + name + '\n', savedContent: null, readonly: false
+    content: '-- ' + name + '\n', savedContent: null, readonly: false, closable: true
   };
   tabs.push(t);
   try { await invoke('file_write', { rel: t.rel, content: t.content }); t.savedContent = t.content; }
