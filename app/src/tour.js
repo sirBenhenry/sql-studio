@@ -24,7 +24,7 @@ export function pressPulse(target, doc = document) {
   p.style.width = (r.width + 8) + 'px';
   p.style.height = (r.height + 8) + 'px';
   doc.body.appendChild(p);
-  return new Promise(res => setTimeout(() => { p.remove(); res(); }, 650));
+  return new Promise(res => setTimeout(() => { p.remove(); res(); }, 1000));
 }
 
 export function runTour(allSteps, opts = {}) {

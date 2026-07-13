@@ -199,10 +199,19 @@ function enterProject(p) {
   activateTab('schema');
   logNote('project opened: ' + p.root);
 
-  // first project ever → walk the whole workflow once
+  // first project ever → walk the whole workflow once. Fired only after
+  // reconcile finishes so the tour never collides with the name-the-database
+  // modal, and the engine is up for the demo.
   let toured = null;
   try { toured = localStorage.getItem('sqlstudio.toured'); } catch { /* ignore */ }
-  if (!toured) setTimeout(startAppTour, 700);
+  pendingTour = !toured;
+}
+
+let pendingTour = false;
+function firePendingTour() {
+  if (!pendingTour) return;
+  pendingTour = false;
+  setTimeout(startAppTour, 500);
 }
 
 /* ================= tabs + editor ================= */
@@ -300,6 +309,7 @@ function schemaModel() {
 /** regenerate schema.sql from the designer's model: the database header
  *  (DROP/CREATE/USE) survives; the table blocks are rewritten cleanly. */
 async function writeSchemaFromModel(model) {
+  if (tourDemo) return; // the tour's demo never reaches the user's files
   const t = tabById('schema');
   if (!t) return;
   const header = currentDb
@@ -347,6 +357,7 @@ async function writeSchemaFromModel(model) {
  *  Used when a partially-applied designer change means the file no longer
  *  matches reality — the database is the only honest source left. */
 async function syncSchemaFromDb() {
+  if (tourDemo) return; // never rebuild the user's schema.sql from the demo db
   if (!engineRunning || !currentDb) return;
   const t = tabById('schema');
   if (!t) return;
@@ -489,6 +500,10 @@ editor.addEventListener('input', () => {
 async function saveActive() {
   const t = tabById(activeTab);
   if (!t || t.readonly || t.kind === 'view') return;
+  if (tourDemo && t.id === 'schema') {
+    toast('that is the tour demo — it is never saved to your files');
+    return;
+  }
   try {
     await invoke('file_write', { rel: t.rel, content: t.content });
     t.savedContent = t.content;
@@ -577,6 +592,7 @@ async function runScript(text, source, opts = {}) {
 }
 
 async function journal(source, statements) {
+  if (tourDemo) return; // demo activity is not project history
   const entry = journalEntry(source, statements);
   try {
     await invoke('journal_append', { entry });
@@ -602,6 +618,7 @@ function scheduleSnapshot() {
 }
 
 async function snapshotData() {
+  if (tourDemo) return; // demo rows must not land in data.sql
   if (!engineRunning || !currentDb || !project) return;
   const t = tabById('data');
   if (!t) return;
@@ -637,10 +654,12 @@ async function startEngine(root) {
     $('#status-right').textContent = 'engine :' + info.port;
     logNote('engine ready — this project is a live database');
     await reconcile();
+    firePendingTour();
   } catch (e) {
     engineRunning = false;
     setEngineStatus('● engine: failed', 'err');
     logErr(String(e));
+    firePendingTour(); // the tour still works, just without the demo db
   }
 }
 
@@ -804,8 +823,60 @@ $('#console-input').addEventListener('keydown', e => {
 
 /* ================= onboarding tour ================= */
 
-function startAppTour() {
+/* ---- tour demo: an empty project borrows the little library to explore.
+   It lives ONLY in the sandbox + the schema tab's memory — never in the
+   user's files — and is dropped again the moment the tour ends. ---- */
+let tourDemo = null; // { prevSchema, prevSaved, prevDb } while active
+
+async function loadTourDemo() {
+  const t = tabById('schema');
+  if (!t || !engineRunning || typeof DEMO_SQL === 'undefined') return false;
+  if (currentDb === 'library') return false; // never touch a real db named library
+  tourDemo = { prevSchema: t.content, prevSaved: t.savedContent, prevDb: currentDb };
+  for (const stmt of splitSQL(DEMO_SQL)) {
+    try { await runStatement(stmt); }
+    catch (e) {
+      logErr('tour demo failed to load: ' + e);
+      await endTourDemo();
+      return false;
+    }
+  }
+  t.content = DEMO_SQL;
+  t.savedContent = DEMO_SQL; // in-memory only; saving it is blocked below
+  if (activeTab === 'schema') setEditorText(t.content);
+  renderTabs();
+  if (builder) builder.setSchema(DEMO_SQL);
+  logNote('tour demo loaded — a small lending library; it disappears when the tour ends');
+  return true;
+}
+
+async function endTourDemo() {
+  if (!tourDemo) return;
+  const demo = tourDemo;
+  tourDemo = null;
+  const t = tabById('schema');
+  if (t) {
+    t.content = demo.prevSchema;
+    t.savedContent = demo.prevSaved;
+  }
+  tabs = tabs.filter(x => !x.id.startsWith('t:')); // demo grids mean nothing now
+  try { await invoke('db_exec', { sql: 'DROP DATABASE IF EXISTS library', db: null }); }
+  catch { /* engine gone — nothing left to clean */ }
+  currentDb = demo.prevDb;
+  if (builder && t) builder.setSchema(t.content);
+  activateTab('schema');
+  logNote('tour demo removed — your project is exactly as it was');
+}
+
+async function startAppTour() {
   const settle = ms => new Promise(r => setTimeout(r, ms));
+  // an empty project has nothing to show — borrow the demo library for the
+  // duration of the tour (removed again in onEnd)
+  let usedDemo = false;
+  if (!schemaModel().tables.length) {
+    usedDemo = await loadTourDemo();
+    if (usedDemo) await settle(150);
+  }
   const dbTabBtn = () => [...document.querySelectorAll('#file-tabs .ftab')].find(b => b.textContent.includes('⊞ database'));
   const segBtn = label => [...document.querySelectorAll('.dbtab-bar .seg button')].find(x => x.textContent === label);
   const dbSeg = label => {
@@ -842,6 +913,14 @@ function startAppTour() {
         'in both places at once: the live database and the files. Copy the folder, and ' +
         'you\'ve copied the database.'
     },
+    ...(usedDemo ? [{
+      target: '#editor-host',
+      title: 'A demo to explore',
+      prep: () => activateTab('schema'),
+      text: 'Your project was empty, so the tour brought a small lending library along — ' +
+        'authors, books, members, loans. It exists only during the tour: the moment you ' +
+        'finish (or skip), it vanishes and your project is exactly as you left it.'
+    }] : []),
     {
       target: '#file-tabs',
       title: 'The files',
@@ -970,7 +1049,10 @@ function startAppTour() {
         'and you can replay this tour from there anytime. Have fun!'
     }
   ], {
-    onEnd: () => { try { localStorage.setItem('sqlstudio.toured', '1'); } catch { /* ignore */ } }
+    onEnd: async () => {
+      try { localStorage.setItem('sqlstudio.toured', '1'); } catch { /* ignore */ }
+      await endTourDemo(); // no-op unless the demo was borrowed
+    }
   });
 }
 
