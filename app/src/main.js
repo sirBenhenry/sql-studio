@@ -709,6 +709,13 @@ function noteEngineError(msg) {
   }
 }
 
+/* the statusbar names the active database next to the project */
+function reflectDb() {
+  if (project) {
+    $('#status-left').textContent = project.name + (currentDb ? ' · db: ' + currentDb : '');
+  }
+}
+
 /** run ONE statement with database-context tracking */
 async function runStatement(sql) {
   const useM = sql.match(/^USE\s+`?([\w$]+)`?\s*$/i);
@@ -716,6 +723,7 @@ async function runStatement(sql) {
     // let the server verify it — a typo must error, not poison currentDb
     await invoke('db_exec', { sql, db: null });
     currentDb = useM[1];
+    reflectDb();
     logOk('database: ' + currentDb);
     return { columns: [], rows: [], affected: 0, elapsed_ms: 0 };
   }
@@ -931,6 +939,7 @@ async function reconcile() {
   } catch (e) {
     logErr('reconcile failed: ' + e);
   }
+  reflectDb();
   if (builder) builder.setSchema(schemaText);
 }
 
@@ -1298,8 +1307,9 @@ async function startAppTour() {
     {
       target: '#console-pane',
       title: 'The console',
-      text: 'Results land here. You can also type SQL directly and press Enter — it runs, but ' +
-        'is deliberately NOT recorded in the journal: scratch space. ↑ recalls your history.'
+      text: 'Results land here. You can also type SQL directly — Enter runs it, Shift+Enter ' +
+        'makes a new line — but it is deliberately NOT recorded in the journal: scratch ' +
+        'space. ↑ recalls your history.'
     },
     {
       target: '#engine-status',
@@ -1487,6 +1497,16 @@ try {
 
 $('#btn-new-project').addEventListener('click', newProject);
 $('#btn-open-project').addEventListener('click', openProject);
+
+/* drop a project folder anywhere on the welcome screen to open it */
+try {
+  window.__TAURI__.event.listen('tauri://drag-drop', ev => {
+    if (project) return; // only the welcome screen accepts drops
+    const paths = (ev.payload && ev.payload.paths) || [];
+    if (paths.length) openProjectAt(paths[0]);
+  });
+} catch { /* event API unavailable */ }
+
 renderRecents();
 wireSettingsUI();
 applyTheme();
