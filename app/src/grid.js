@@ -117,7 +117,8 @@ export function mountGrid(host, table, hooks) {
   sug.style.display = 'none';
   let sugFor = null;
   let sugT = null;
-  function hideSug() { sug.style.display = 'none'; sugFor = null; }
+  let sugIdx = -1;
+  function hideSug() { sug.style.display = 'none'; sugFor = null; sugIdx = -1; }
   function showSug(inp, items) {
     if (!items.length) { hideSug(); return; }
     sug.textContent = '';
@@ -158,7 +159,24 @@ export function mountGrid(host, table, hooks) {
       }, 150);
     });
     inp.addEventListener('blur', () => setTimeout(() => { if (sugFor === inp) hideSug(); }, 120));
-    inp.addEventListener('keydown', e => { if (e.key === 'Escape') hideSug(); });
+    inp.addEventListener('keydown', e => {
+      if (sugFor !== inp || sug.style.display === 'none') {
+        if (e.key === 'Escape') hideSug();
+        return;
+      }
+      const items = [...sug.querySelectorAll('.grid-sug-item')];
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        sugIdx = e.key === 'ArrowDown' ? Math.min(items.length - 1, sugIdx + 1) : Math.max(0, sugIdx - 1);
+        items.forEach((it, i) => it.classList.toggle('active', i === sugIdx));
+      } else if (e.key === 'Enter' && sugIdx >= 0) {
+        e.preventDefault();
+        e.stopPropagation(); // Enter must pick, not commit the cell / insert the row
+        items[sugIdx].dispatchEvent(new (inp.ownerDocument.defaultView.MouseEvent)('mousedown', { bubbles: true }));
+      } else if (e.key === 'Escape') {
+        hideSug();
+      }
+    }, true);
   }
 
   function cellEditor(td, rowIdx, colIdx) {

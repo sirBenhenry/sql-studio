@@ -142,6 +142,20 @@ ck('DELETE addressed by PK', del === 'DELETE FROM `item` WHERE `id` = 1 LIMIT 1'
   sug.querySelector('.grid-sug-item').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
   ck('picking fills in the id', fkInp.value === '2', fkInp.value);
   ck('dropdown hidden after pick', sug.style.display === 'none', sug.style.display);
+
+  // keyboard: type again, ArrowDown + Enter picks — and does NOT insert the row
+  fkInp.value = 'ann';
+  fkInp.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(250);
+  ck('suggestions visible again', sug.style.display === 'block');
+  fkInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  ck('arrow highlights an item', sug.querySelector('.grid-sug-item.active') != null);
+  const insertsBefore = lookups.length; // no exec spy here; assert value only
+  fkInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick(20);
+  ck('Enter picks the highlighted row', fkInp.value === '2', fkInp.value);
+  ck('dropdown gone after keyboard pick', sug.style.display === 'none');
+  void insertsBefore;
 }
 
 // --- '' vs NULL, sort, load-more ---

@@ -173,7 +173,15 @@ async function newProject() {
 async function openProjectAt(path) {
   try {
     enterProject(await invoke('project_open', { path }));
-  } catch (e) { toast(String(e)); }
+  } catch (e) {
+    toast(String(e));
+    // a recent that no longer opens (folder gone / no schema.sql) leaves the list
+    const rec = getRecents();
+    if (rec.some(r => r.root === path)) {
+      localStorage.setItem('sqlstudio.recents', JSON.stringify(rec.filter(r => r.root !== path)));
+      renderRecents();
+    }
+  }
 }
 
 async function openProject() {
@@ -187,6 +195,9 @@ function enterProject(p) {
   pushRecent(p.root, p.name);
   $('#project-label').textContent = p.root;
   $('#status-left').textContent = p.name;
+  // the window says which project it is — two windows, two projects
+  try { window.__TAURI__.window.getCurrentWindow().setTitle(p.name + ' — SQL Studio'); }
+  catch { /* window API unavailable */ }
   $('#welcome').hidden = true;
   $('#workspace').hidden = false;
   startEngine(p.root);
@@ -644,8 +655,24 @@ const SYSTEM_DBS = new Set(['mysql', 'information_schema', 'performance_schema',
 
 function setEngineStatus(text, cls) {
   const s = $('#engine-status');
-  s.textContent = text;
+  s.textContent = cls === 'err' ? text + ' — click to restart' : text;
   s.className = 'engine-status' + (cls ? ' ' + cls : '');
+}
+
+/* a dead engine shouldn't need an app restart */
+$('#engine-status').addEventListener('click', () => {
+  if (!project || engineRunning) return;
+  if ($('#engine-status').classList.contains('err')) startEngine(project.root);
+});
+
+/** an error that smells like the server went away flips the status so the
+ *  click-to-restart path lights up */
+function noteEngineError(msg) {
+  if (!engineRunning) return;
+  if (/engine not running|Connection refused|10061|broken pipe|Lost connection|10054/i.test(String(msg))) {
+    engineRunning = false;
+    setEngineStatus('● engine: lost', 'err');
+  }
 }
 
 /** run ONE statement with database-context tracking */
@@ -684,6 +711,7 @@ async function runScript(text, source, opts = {}) {
       applied.push(stmt);
     } catch (e) {
       logErr(String(e));
+      noteEngineError(e);
       if (applied.length && opts.journal) await journal(source + ' (partial)', applied);
       if (applied.length && opts.onPartial) opts.onPartial(applied.length);
       return false;
