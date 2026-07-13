@@ -882,6 +882,34 @@ builder = mountBuilder($('#builder-host'), {
     const refCol = (def && (def.columns.find(c => c.pk) || {}).name) || 'id';
     return fkRowSearch(refTable, refCol, q);
   },
+  /* "+ to file": built queries append to a queries/*.sql tab (or a new one) */
+  queryFiles() {
+    return tabs.filter(t => t.id.startsWith('q:')).map(t => t.id.slice(2));
+  },
+  async saveToQueryFile(name, sql) {
+    if (!project || !String(sql || '').trim()) return;
+    const clean = String(name).trim().replace(/\.sql$/i, '').replace(/[^\w$-]+/g, '_') || 'query';
+    const id = 'q:' + clean;
+    let t = tabById(id);
+    if (!t) {
+      t = {
+        id, label: clean + '.sql', rel: 'queries/' + clean + '.sql',
+        content: '-- ' + clean + '\n', savedContent: null, readonly: false
+      };
+      tabs.push(t);
+    }
+    let cur = t.content;
+    if (cur && !cur.endsWith('\n')) cur += '\n';
+    cur += '\n' + sql.trim() + '\n';
+    t.content = cur;
+    try {
+      await invoke('file_write', { rel: t.rel, content: cur });
+      t.savedContent = cur;
+      if (activeTab === t.id) setEditorText(cur);
+      renderTabs();
+      toast('query saved to ' + t.label);
+    } catch (e) { toast(String(e)); }
+  },
   onReady() {
     builder.setLang(LANG);
     builder.setTheme(SETTINGS.theme);

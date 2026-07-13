@@ -87,8 +87,11 @@ wireBuilder(d, window, {
   searchFkRows: async (refTable, q) => {
     fkSearches.push({ refTable, q });
     return [{ id: 2, label: '2 · Anna · anna@x.io' }];
-  }
+  },
+  queryFiles: () => ['reports'],
+  saveToQueryFile: async (name, sql) => { saved.push({ name, sql }); }
 });
+const saved = [];
 ck('action bar mounted', !!d.querySelector('#ide-actionbar'));
 
 // a schema with a (self-referencing) FK for the lookup flows
@@ -139,7 +142,7 @@ d.querySelector('#tab-insert').click();
   nameInp.dispatchEvent(new window.Event('input', { bubbles: true }));
   await tick(10);
   calls2.length = 0;
-  d.querySelector('#ide-actionbar button').click();
+  d.querySelector('#ide-actionbar button.primary').click();
   await tick(60);
   ck('Apply runs the insert', calls2.some(c => c.sql && c.sql.includes("'Ben'")), JSON.stringify(calls2));
   const rows = d.querySelectorAll('#insert-rows .set-row');
@@ -197,6 +200,43 @@ d.querySelector('#tab-insert').click();
     sug.textContent);
   sug.querySelector('.ide-sug-item').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
   ck('picking fills the id, not the label', fkInp.value === '2', fkInp.value);
+}
+
+// ---- "+ to file": pick an existing query file or create a new one ----
+{
+  const fileBtn = [...d.querySelectorAll('#ide-actionbar button')].find(b => b.textContent === '+ to file');
+  ck('+ to file button exists', !!fileBtn);
+  ck('hidden outside SELECT mode', fileBtn.style.display === 'none', fileBtn.style.display);
+
+  // build a fresh SELECT on the current (member) schema
+  d.querySelector('#tab-select').click();
+  await tick(20);
+  [...d.querySelectorAll('.bank-btn')][0].click();
+  [...d.querySelectorAll('.popover .chip')].find(c => c.textContent === 'member').click();
+  await tick(20);
+  ck('visible in SELECT mode with SQL built', fileBtn.style.display !== 'none' && !fileBtn.disabled,
+    fileBtn.style.display + '/' + fileBtn.disabled);
+
+  // existing file path
+  fileBtn.click();
+  const menu = d.querySelector('#ide-filemenu');
+  ck('picker opens with existing files', menu.style.display === 'block' &&
+    [...menu.querySelectorAll('.ide-fm-item')].some(i => i.textContent === 'reports.sql'), menu.textContent);
+  [...menu.querySelectorAll('.ide-fm-item')].find(i => i.textContent === 'reports.sql').click();
+  await tick(20);
+  ck('appends to the picked file', saved.some(s => s.name === 'reports' && s.sql.includes('SELECT') && s.sql.includes('member')),
+    JSON.stringify(saved));
+  ck('picker closed after pick', menu.style.display === 'none');
+
+  // new-file path
+  saved.length = 0;
+  fileBtn.click();
+  const inp = menu.querySelector('.ide-fm-new input');
+  inp.value = 'best sellers';
+  inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick(20);
+  ck('creates a new file by name', saved.some(s => s.name === 'best sellers' && s.sql.includes('member')),
+    JSON.stringify(saved));
 }
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');

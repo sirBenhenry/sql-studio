@@ -90,6 +90,31 @@ const HIDE_CSS = `
   .ide-sug-item { padding: 5px 10px; cursor: pointer; white-space: nowrap; }
   .ide-sug-item:hover, .ide-sug-item.active { background: var(--ink); color: var(--bg); }
 
+  /* the "+ to file" picker above the action bar */
+  #ide-filemenu {
+    position: fixed; right: 12px; bottom: 52px; z-index: 60;
+    min-width: 220px;
+    background: var(--bg); border: 1px solid var(--rule);
+    box-shadow: 0 10px 28px rgba(0,0,0,.25);
+    padding: 6px 0;
+  }
+  .ide-fm-head {
+    padding: 4px 12px 6px; color: var(--muted);
+    font-size: .6rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .ide-fm-item {
+    padding: 6px 12px; cursor: pointer;
+    font-family: ui-monospace, Consolas, monospace; font-size: .76rem;
+  }
+  .ide-fm-item:hover { background: var(--ink); color: var(--bg); }
+  .ide-fm-new { display: flex; gap: 6px; padding: 8px 12px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+  .ide-fm-new input {
+    flex: 1; min-width: 0;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+    font-family: ui-monospace, Consolas, monospace; font-size: .76rem; padding: 4px 8px; outline: none;
+  }
+  .ide-fm-new input:focus { border-color: var(--accent); }
+
   /* the short "already applied" history above the fresh insert row */
   #ide-applied:not(:empty) { margin: 6px 0 4px; }
   .ide-applied-line {
@@ -240,11 +265,77 @@ export function wireBuilder(d, win, hooks) {
   bar.id = 'ide-actionbar';
   const peek = d.createElement('span');
   peek.className = 'sqlpeek';
+  const fileBtn = d.createElement('button');
+  fileBtn.className = 'btn small';
+  fileBtn.textContent = '+ to file';
+  fileBtn.title = 'append this query to a saved query file (queries/*.sql)';
   const actBtn = d.createElement('button');
   actBtn.className = 'btn primary small';
   bar.appendChild(peek);
+  bar.appendChild(fileBtn);
   bar.appendChild(actBtn);
   d.body.appendChild(bar);
+
+  /* ---- "+ to file": pick an existing query file or create a new one ---- */
+  const fileMenu = d.createElement('div');
+  fileMenu.id = 'ide-filemenu';
+  fileMenu.style.display = 'none';
+  d.body.appendChild(fileMenu);
+  function hideFileMenu() { fileMenu.style.display = 'none'; }
+  function showFileMenu() {
+    fileMenu.textContent = '';
+    const head = d.createElement('div');
+    head.className = 'ide-fm-head';
+    head.textContent = 'append this query to…';
+    fileMenu.appendChild(head);
+    const names = (hooks.queryFiles ? hooks.queryFiles() : []) || [];
+    for (const n of names) {
+      const it = d.createElement('div');
+      it.className = 'ide-fm-item';
+      it.textContent = n + '.sql';
+      it.addEventListener('click', async () => {
+        hideFileMenu();
+        if (hooks.saveToQueryFile) await hooks.saveToQueryFile(n, currentSQL());
+      });
+      fileMenu.appendChild(it);
+    }
+    const row = d.createElement('div');
+    row.className = 'ide-fm-new';
+    const inp = d.createElement('input');
+    inp.type = 'text';
+    inp.spellcheck = false;
+    inp.placeholder = names.length ? 'new file name…' : 'name your first query file…';
+    const ok = d.createElement('button');
+    ok.className = 'btn primary small';
+    ok.textContent = 'create';
+    const createIt = async () => {
+      const name = inp.value.trim();
+      if (!name) { inp.focus(); return; }
+      hideFileMenu();
+      if (hooks.saveToQueryFile) await hooks.saveToQueryFile(name, currentSQL());
+    };
+    ok.addEventListener('click', createIt);
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') createIt();
+      else if (e.key === 'Escape') hideFileMenu();
+    });
+    row.appendChild(inp);
+    row.appendChild(ok);
+    fileMenu.appendChild(row);
+    fileMenu.style.display = 'block';
+    inp.focus();
+  }
+  fileBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (fileMenu.style.display === 'block') { hideFileMenu(); return; }
+    if (!splitSQL(currentSQL()).length) return;
+    showFileMenu();
+  });
+  d.addEventListener('mousedown', e => {
+    if (fileMenu.style.display === 'block' && !fileMenu.contains(e.target) && e.target !== fileBtn) {
+      hideFileMenu();
+    }
+  });
 
   function refreshBar() {
     const a = ACTIONS[currentMode()];
@@ -253,6 +344,9 @@ export function wireBuilder(d, win, hooks) {
     const sql = currentSQL();
     peek.textContent = sql.replace(/\s+/g, ' ');
     actBtn.disabled = !splitSQL(sql).length;
+    // saving to a file is a SELECT thing — queries worth keeping
+    fileBtn.style.display = currentMode() === 'select' ? '' : 'none';
+    fileBtn.disabled = actBtn.disabled;
     // the add-row button says what it will actually do
     if (addRowBtn) {
       addRowBtn.textContent = (currentMode() === 'insert' && splitSQL(sql).length && insertRowsFilled())
