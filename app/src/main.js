@@ -422,6 +422,15 @@ async function applySchemaFile(t) {
   try { dbModel = modelFromSchema(window.parseSchema(Object.values(await fetchDbDDL()).join('\n'))); }
   catch (e) { logErr('could not read the live database: ' + e); return false; }
 
+  // table-level KEY/INDEX lines are kept verbatim but not diffed — be honest
+  // about the one thing a file save won't apply live
+  for (const ft of fileModel) {
+    const dt = dbModel.find(x => x.name === ft.name);
+    if (dt && JSON.stringify(ft.extras || []) !== JSON.stringify(dt.extras || [])) {
+      logNote('note: changed KEY/INDEX lines in ' + ft.name + ' are not applied live — they take effect on a rebuild from files');
+    }
+  }
+
   const { stmts, destructive, fixups } = diffModels(fileModel, dbModel);
   const pre = await resolveFixups(fixups, async sql => await invoke('db_exec', { sql, db: currentDb }));
   const all = pre.concat(stmts);
@@ -860,14 +869,24 @@ async function reconcile() {
 
 /* ================= console ================= */
 
+/* the console log is capped — a long session must not accumulate thousands
+   of DOM nodes and start to crawl */
+const CONSOLE_MAX_NODES = 600;
+function trimConsole() {
+  const log = $('#console-log');
+  while (log.childNodes.length > CONSOLE_MAX_NODES) log.removeChild(log.firstChild);
+}
+
 function logNote(text) {
   const d = el('div', 'log-note', text);
   $('#console-log').appendChild(d);
+  trimConsole();
   d.scrollIntoView({ block: 'end' });
 }
 function logStmt(sql) {
   const d = el('div', 'log-stmt', '> ' + sql);
   $('#console-log').appendChild(d);
+  trimConsole();
   d.scrollIntoView({ block: 'end' });
 }
 function logErr(text) {
@@ -914,6 +933,7 @@ function logResult(res) {
     if (res.rows.length > MAX) note += ' (showing first ' + MAX + ')';
     wrap.appendChild(el('div', 'log-note', note));
     $('#console-log').appendChild(wrap);
+    trimConsole();
     wrap.scrollIntoView({ block: 'end' });
   } else {
     logOk('ok — ' + res.affected + ' row' + (res.affected === 1 ? '' : 's') + ' affected · ' + res.elapsed_ms + ' ms');
