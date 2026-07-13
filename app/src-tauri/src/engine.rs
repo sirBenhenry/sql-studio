@@ -527,6 +527,19 @@ mod tests {
             .unwrap();
         conn.query_drop("INSERT INTO dt () VALUES ()").unwrap();
 
+        // pin HOW MySQL echoes defaults — the JS diff canonicalizer (canonDef/
+        // canonType in tables-designer.js) relies on exactly these spellings;
+        // if an engine upgrade changes them, this must fail loudly
+        conn.query_drop("CREATE TABLE spell (ok BOOLEAN NOT NULL DEFAULT TRUE, p DECIMAL(4,2) DEFAULT 3.50)")
+            .unwrap();
+        let sc: Vec<(String, String)> = conn.query("SHOW CREATE TABLE spell").unwrap();
+        let ddl = &sc[0].1;
+        assert!(ddl.contains("tinyint(1)"), "BOOLEAN echoes as tinyint(1): {ddl}");
+        assert!(ddl.contains("DEFAULT '1'"), "TRUE echoes as '1': {ddl}");
+        assert!(ddl.contains("DEFAULT '3.50'"), "decimal default echoes quoted: {ddl}");
+        let sc2: Vec<(String, String)> = conn.query("SHOW CREATE TABLE dt").unwrap();
+        assert!(sc2[0].1.contains("DEFAULT (curdate())"), "expression default echoes lowercase in parens: {}", sc2[0].1);
+
         drop(conn);
         let mut e = Engine { child: Some(child), port, pool: Some(pool), lock_path: None };
         e.shutdown();

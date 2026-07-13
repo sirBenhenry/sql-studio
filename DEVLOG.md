@@ -94,6 +94,26 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
 16. **Journal tab opens at its newest entries** (scroll-to-bottom on
     activate).
 
+## Round 4 — hardening sweep (continued autonomy)
+
+17. **Round-trip fuzz net** — 60 random designer models (deterministic seed)
+    → DDL → parser → model, every column property asserted; the invariant
+    that broke twice before is now permanently watched. It immediately
+    flagged the NOW()→CURRENT_TIMESTAMP canonicalization (asserted equal).
+18. **Undo/redo survives View↔Edit remounts** — per-project history store,
+    adopted only when the stored last snapshot still structurally matches
+    the incoming schema (external changes reset it; the tour demo gets its
+    own lane). Tested incl. the reset path.
+19. **Console capped at 600 nodes** (long sessions can't crawl); file-save
+    warns when changed KEY/INDEX lines won't apply live; editor highlight
+    perf measured (3.7 ms @ 1400 lines) and left alone.
+20. **Phantom-MODIFY class killed** — SHOW CREATE TABLE spells things its own
+    way (BOOLEAN→tinyint(1), INTEGER→int, expression defaults lowercase in
+    parens, TRUE→'1', decimals quoted); without canonicalization every
+    Ctrl+S re-emitted the same MODIFYs forever. canonType + canonDef in the
+    diff, tested in JS, and MySQL's exact spellings PINNED in the cargo test
+    so an engine upgrade fails loudly instead of silently breaking the diff.
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much
