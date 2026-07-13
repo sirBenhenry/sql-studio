@@ -37,7 +37,7 @@ fn read_or(path: &Path, fallback: &str) -> String {
 /// Write via temp-file + rename so a crash mid-write can never leave a
 /// truncated schema.sql/data.sql/journal.sql — the project IS these files.
 fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
-    let tmp = path.with_extension("sql.tmp");
+    let tmp = path.with_extension("tmp");
     fs::write(&tmp, content).map_err(|e| e.to_string())?;
     // std::fs::rename replaces existing files on Windows (MOVEFILE_REPLACE_EXISTING)
     fs::rename(&tmp, path).map_err(|e| {
@@ -160,6 +160,25 @@ pub async fn import_read(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// UI state that belongs to the PROJECT (canvas layout etc.) — lives in
+/// .sqlstudio/ui.json so copying/moving the folder carries it along.
+#[tauri::command]
+pub async fn ui_state_read(state: tauri::State<'_, ProjectState>) -> Result<String, String> {
+    let root = current_root(&state)?;
+    Ok(read_or(&root.join(".sqlstudio").join("ui.json"), "{}"))
+}
+
+#[tauri::command]
+pub async fn ui_state_write(
+    state: tauri::State<'_, ProjectState>,
+    content: String,
+) -> Result<(), String> {
+    let root = current_root(&state)?;
+    let dir = root.join(".sqlstudio");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    write_atomic(&dir.join("ui.json"), &content)
+}
+
 /// Rename a saved query file (queries/*.sql only — resolve() guards both ends).
 #[tauri::command]
 pub async fn query_rename(
@@ -209,10 +228,7 @@ mod tests {
         // the rename must REPLACE an existing file (Windows historically balked)
         write_atomic(&target, "second").unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "second");
-        assert!(
-            !dir.join("schema.sql.tmp").exists() && !target.with_extension("sql.tmp").exists(),
-            "no temp debris"
-        );
+        assert!(!target.with_extension("tmp").exists(), "no temp debris");
         let _ = fs::remove_dir_all(&dir);
     }
 }

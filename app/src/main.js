@@ -200,6 +200,7 @@ function enterProject(p) {
   catch { /* window API unavailable */ }
   $('#welcome').hidden = true;
   $('#workspace').hidden = false;
+  loadUiState(); // project-owned layout etc. (fire-and-forget — ms vs clicks)
   startEngine(p.root);
 
   tabs = [
@@ -486,6 +487,36 @@ function canvasPosKey() {
   return 'sqlstudio.canvas.' + (project ? project.root : '');
 }
 
+/* ---- project-owned UI state (.sqlstudio/ui.json): canvas layout travels
+   WITH the folder instead of living in this machine's localStorage ---- */
+let uiState = {};
+let uiStateT = null;
+
+async function loadUiState() {
+  uiState = {};
+  try { uiState = JSON.parse(await invoke('ui_state_read')) || {}; }
+  catch { /* fresh or unreadable — start empty */ }
+  // one-time migration from the old localStorage home
+  if (!uiState.canvas) {
+    try {
+      const legacy = JSON.parse(localStorage.getItem(canvasPosKey()));
+      if (legacy && Object.keys(legacy).length) {
+        uiState.canvas = legacy;
+        localStorage.removeItem(canvasPosKey());
+        saveUiState();
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+function saveUiState() {
+  clearTimeout(uiStateT);
+  uiStateT = setTimeout(() => {
+    invoke('ui_state_write', { content: JSON.stringify(uiState) })
+      .catch(() => { /* transient — next save retries */ });
+  }, 300);
+}
+
 function renderDbTab(host) {
   host.textContent = '';
   const bar = el('div', 'dbtab-bar');
@@ -507,7 +538,8 @@ function renderDbTab(host) {
     const reset = el('button', 'btn small', 'reset layout');
     reset.title = 'forget dragged positions and lay the diagram out again';
     reset.addEventListener('click', () => {
-      localStorage.removeItem(canvasPosKey());
+      delete uiState.canvas;
+      saveUiState();
       renderDbTab(host);
     });
     bar.appendChild(reset);
@@ -521,10 +553,11 @@ function renderDbTab(host) {
     mountCanvasView(body, schemaModel(), {
       openTable: openTableGrid,
       loadPositions() {
-        try { return JSON.parse(localStorage.getItem(canvasPosKey())) || {}; } catch { return {}; }
+        return uiState.canvas ? JSON.parse(JSON.stringify(uiState.canvas)) : {};
       },
       savePositions(pos) {
-        try { localStorage.setItem(canvasPosKey(), JSON.stringify(pos)); } catch { /* ignore */ }
+        uiState.canvas = pos;
+        saveUiState();
       }
     });
   } else {
@@ -540,14 +573,14 @@ function renderDbTab(host) {
       historyKey: project ? project.root + (tourDemo ? '#demo' : '') : null,
       // a table rename keeps its canvas position and any open grid tab
       onRenames(renamed) {
-        try {
-          const raw = JSON.parse(localStorage.getItem(canvasPosKey())) || {};
+        const raw = uiState.canvas;
+        if (raw) {
           let changed = false;
           for (const [from, to] of Object.entries(renamed)) {
             if (raw[from] && !raw[to]) { raw[to] = raw[from]; delete raw[from]; changed = true; }
           }
-          if (changed) localStorage.setItem(canvasPosKey(), JSON.stringify(raw));
-        } catch { /* ignore */ }
+          if (changed) saveUiState();
+        }
         for (const [from, to] of Object.entries(renamed)) {
           const gt = tabById('t:' + from);
           if (gt) {

@@ -162,6 +162,15 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
     IMMEDIATELY with a pointer to the .err log when mysqld exits at launch
     (was: a silent 40-second wait). Clippy clean, all 4 cargo tests green.
 
+## Round 10
+
+32. **Canvas layout travels with the project** — positions/pan/zoom move from
+    this machine's localStorage into `<project>/.sqlstudio/ui.json`
+    (new guarded ui_state_read/write commands, atomic writes, debounced;
+    one-time migration from the old localStorage key). Copy or move the
+    folder and your arranged diagram comes along — matching the product's
+    core promise.
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much
