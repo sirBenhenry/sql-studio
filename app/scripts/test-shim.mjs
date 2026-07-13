@@ -76,12 +76,17 @@ const tick = ms => new Promise(r => setTimeout(r, ms));
 const { wireBuilder } = await import('../src/builder-shim.js');
 const calls2 = [];
 const lookupCalls = [];
+const fkSearches = [];
 wireBuilder(d, window, {
   runScript: async (sql, source, opts) => { calls2.push({ sql, source, opts }); return true; },
   appendData: sql => calls2.push({ data: sql }),
   lookupValues: async (table, column, prefix) => {
     lookupCalls.push({ table, column, prefix });
     return ['Anna', 'Annabel'];
+  },
+  searchFkRows: async (refTable, q) => {
+    fkSearches.push({ refTable, q });
+    return [{ id: 2, label: '2 · Anna · anna@x.io' }];
   }
 });
 ck('action bar mounted', !!d.querySelector('#ide-actionbar'));
@@ -168,6 +173,30 @@ d.querySelector('#tab-insert').click();
   sug.querySelector('.ide-sug-item').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
   ck('picking a suggestion fills the value', valInp.value === 'Anna', valInp.value);
   ck('dropdown hidden after pick', sug.style.display === 'none', sug.style.display);
+}
+
+// ---- the grid's whole-row FK search, on the insert tab's id-input ----
+{
+  // close any open popover first
+  d.body.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+  await tick(20);
+  const fkInp = [...d.querySelectorAll('#insert-rows .set-row input')]
+    .find(i => i.title === 'invited_by');
+  ck('FK id-input present', !!fkInp);
+  fkInp.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  ck('placeholder announces the search', fkInp.placeholder === 'invited_by — type to search member', fkInp.placeholder);
+  fkInp.focus();
+  fkInp.value = 'ann';
+  fkInp.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(250);
+  ck('row search queried the referenced table',
+    fkSearches.some(s => s.refTable === 'member' && s.q === 'ann'), JSON.stringify(fkSearches));
+  const sug = d.querySelector('#ide-suggest');
+  ck('row suggestions shown with all values',
+    sug.style.display === 'block' && sug.querySelector('.ide-sug-item').textContent === '2 · Anna · anna@x.io',
+    sug.textContent);
+  sug.querySelector('.ide-sug-item').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+  ck('picking fills the id, not the label', fkInp.value === '2', fkInp.value);
 }
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');

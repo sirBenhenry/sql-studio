@@ -448,30 +448,7 @@ async function renderViewTab(t, host) {
       journal: (source, stmts) => journal(source, stmts),
       shouldConfirm: () => SETTINGS.confirmDelete,
       rowLimit: () => SETTINGS.rowLimit,
-      /* FK search in the grid: match the referenced table's human columns
-         (or the key itself when a number is typed), label rows readably */
-      async lookupFkRows(refTable, refCol, q) {
-        if (!engineRunning || !currentDb) return [];
-        const def = schemaModel().byName[refTable];
-        if (!def) return [];
-        const human = def.columns.filter(c => !c.pk && !c.numeric).slice(0, 2).map(c => c.name);
-        const like = String(q).replace(/([\\%_])/g, '\\$1').replace(/'/g, "''");
-        const conds = human.map(c => '`' + c + "` LIKE '%" + like + "%'");
-        if (/^\d+$/.test(String(q).trim())) conds.push('`' + refCol + '` = ' + String(q).trim());
-        if (!conds.length) return [];
-        const cols = ['`' + refCol + '`'].concat(human.map(c => '`' + c + '`'));
-        try {
-          const res = await invoke('db_exec', {
-            sql: 'SELECT ' + cols.join(', ') + ' FROM `' + refTable + '` WHERE ' +
-              conds.join(' OR ') + ' LIMIT 8',
-            db: currentDb
-          });
-          return res.rows.map(r => ({
-            id: r[0],
-            label: r[0] + ' · ' + r.slice(1).filter(v => v != null).join(' · ')
-          }));
-        } catch { return []; }
-      }
+      lookupFkRows: fkRowSearch
     });
   }
 }
@@ -813,6 +790,34 @@ $('#console-input').addEventListener('keydown', e => {
   runScript(sql, 'console', { journal: false });
 });
 
+/* ================= FK row search (grid + builder share it) ================= */
+
+/** live rows of a referenced table matching what the user typed: the human
+ *  (non-numeric, non-PK) columns are searched, a typed number also matches
+ *  the key itself; results labeled "id · name · …" */
+async function fkRowSearch(refTable, refCol, q) {
+  if (!engineRunning || !currentDb) return [];
+  const def = schemaModel().byName[refTable];
+  if (!def) return [];
+  const human = def.columns.filter(c => !c.pk && !c.numeric).slice(0, 2).map(c => c.name);
+  const like = String(q).replace(/([\\%_])/g, '\\$1').replace(/'/g, "''");
+  const conds = human.map(c => '`' + c + "` LIKE '%" + like + "%'");
+  if (/^\d+$/.test(String(q).trim())) conds.push('`' + refCol + '` = ' + String(q).trim());
+  if (!conds.length) return [];
+  const cols = ['`' + refCol + '`'].concat(human.map(c => '`' + c + '`'));
+  try {
+    const res = await invoke('db_exec', {
+      sql: 'SELECT ' + cols.join(', ') + ' FROM `' + refTable + '` WHERE ' +
+        conds.join(' OR ') + ' LIMIT 8',
+      db: currentDb
+    });
+    return res.rows.map(r => ({
+      id: r[0],
+      label: r[0] + ' · ' + r.slice(1).filter(v => v != null).join(' · ')
+    }));
+  } catch { return []; }
+}
+
 /* ================= builder mount + sync hooks ================= */
 
 /* builder INSERTs used to append here one by one; data.sql is now a full
@@ -869,6 +874,13 @@ builder = mountBuilder($('#builder-host'), {
       });
       return res.rows.map(r => r[0]).filter(v => v != null);
     } catch { return []; }
+  },
+  /* the grid-style FK row search, for the insert tab: the shim only knows
+     the referenced table's name — resolve its key (the PK) here */
+  async searchFkRows(refTable, q) {
+    const def = schemaModel().byName[refTable];
+    const refCol = (def && (def.columns.find(c => c.pk) || {}).name) || 'id';
+    return fkRowSearch(refTable, refCol, q);
   },
   onReady() {
     builder.setLang(LANG);

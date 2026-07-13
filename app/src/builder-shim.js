@@ -321,18 +321,20 @@ export function wireBuilder(d, win, hooks) {
     clearTimeout(sugT); // no point suggesting what was just picked
     t.focus();
   }
-  function showSug(input, values) {
-    if (!values.length) { hideSug(); return; }
+  function showSug(input, items) {
+    // items: [{ label, fill }] — what's shown vs. what lands in the input
+    if (!items.length) { hideSug(); return; }
     sug.textContent = '';
-    for (const v of values) {
+    for (const item of items) {
       const it = d.createElement('div');
       it.className = 'ide-sug-item';
-      it.textContent = v;
+      it.textContent = item.label;
+      it.dataset.fill = item.fill;
       it.addEventListener('mousedown', ev => {
         ev.preventDefault();
         ev.stopPropagation();
         sugFor = input;
-        pick(v);
+        pick(item.fill);
       });
       sug.appendChild(it);
     }
@@ -360,18 +362,44 @@ export function wireBuilder(d, win, hooks) {
     return (sel && sel.value) ? { table: m[1], column: sel.value } : null;
   }
 
+  /** an insert-row FK id-input: whole-row search of the referenced table
+   *  (the grid's system, which is faster and can't pick the wrong row) */
+  function insFkCtx(input) {
+    if (!input || input.tagName !== 'INPUT') return null;
+    if (input._ideFk) return input._ideFk;
+    if (!input.closest('#insert-rows')) return null;
+    if (!/ \(id\)$/.test(input.placeholder || '')) return null;
+    const btn = input.nextElementSibling;
+    const m = btn && btn.classList && btn.classList.contains('lookup-btn') &&
+      (btn.title || '').match(/look up the ([\w$]+) row/);
+    if (!m) return null;
+    input._ideFk = { col: input.title, refTable: m[1] };
+    input.placeholder = input.title + ' — type to search ' + m[1];
+    return input._ideFk;
+  }
+  // patch the placeholder as soon as an FK input is focused, not just typed in
+  d.addEventListener('focusin', e => { insFkCtx(e.target); });
+
   d.addEventListener('input', e => {
     const t = e.target;
     if (!t || t.tagName !== 'INPUT') return;
-    const ctx = lookupCtx(t);
-    if (!ctx || !hooks.lookupValues) { if (sugFor === t) hideSug(); return; }
+    const pop = lookupCtx(t);
+    const fk = pop ? null : insFkCtx(t);
+    if ((!pop && !fk)) { if (sugFor === t) hideSug(); return; }
     clearTimeout(sugT);
     const q = t.value.trim();
     if (!q) { hideSug(); return; }
     sugT = setTimeout(async () => {
       try {
-        const vals = await hooks.lookupValues(ctx.table, ctx.column, q);
-        if (d.activeElement === t && t.value.trim() === q) showSug(t, vals.map(String));
+        let items = [];
+        if (pop && hooks.lookupValues) {
+          items = (await hooks.lookupValues(pop.table, pop.column, q))
+            .map(v => ({ label: String(v), fill: String(v) }));
+        } else if (fk && hooks.searchFkRows) {
+          items = (await hooks.searchFkRows(fk.refTable, q))
+            .map(r => ({ label: r.label, fill: r.id == null ? '' : String(r.id) }));
+        }
+        if (d.activeElement === t && t.value.trim() === q) showSug(t, items);
       } catch { hideSug(); }
     }, 150);
   });
@@ -385,7 +413,7 @@ export function wireBuilder(d, win, hooks) {
     } else if (e.key === 'Enter' && sugIdx >= 0) {
       e.preventDefault();
       e.stopPropagation();
-      pick(items[sugIdx].textContent);
+      pick(items[sugIdx].dataset.fill);
     } else if (e.key === 'Escape') {
       hideSug();
     }
