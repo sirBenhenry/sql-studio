@@ -145,6 +145,23 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
     line, Enter runs, auto-grows to 120px; ↑/↓ history stays on single-line
     drafts.
 
+## Rounds 7–9 — third solo stretch
+
+27. **Atomic file writes** — schema/data/journal/query writes go through
+    temp + rename (a crash mid-write could truncate the files the project
+    IS); Windows replace-on-rename pinned in a cargo unit test.
+28. **Renames carry their world** — a table rename migrates its saved canvas
+    position and retitles an open ▦ grid tab (hooks.onRenames) instead of
+    orphaning both.
+29. **Editor Tab indents** (two spaces) instead of walking focus away.
+30. **Statusbar shows the active database**; **drop a project folder on the
+    welcome screen to open it**; tour text covers the multiline console.
+31. **Engine honesty** — db_status now checks the actual process (a dead
+    mysqld reported "running" before); a 30s heartbeat flips the UI to
+    click-to-restart even when nothing is executed; startup fails
+    IMMEDIATELY with a pointer to the .err log when mysqld exits at launch
+    (was: a silent 40-second wait). Clippy clean, all 4 cargo tests green.
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much

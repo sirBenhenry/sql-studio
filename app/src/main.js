@@ -709,6 +709,20 @@ function noteEngineError(msg) {
   }
 }
 
+/* heartbeat: a silently-died mysqld flips the status within 30s even if
+   nothing was executed to notice it (db_status checks the actual process) */
+setInterval(async () => {
+  if (!project || !engineRunning || engineStarting) return;
+  try {
+    const s = await invoke('db_status');
+    if (!s.running) {
+      engineRunning = false;
+      setEngineStatus('● engine: lost', 'err');
+      logErr('the engine process died — click the status line to restart it');
+    }
+  } catch { /* IPC hiccup — the next beat retries */ }
+}, 30000);
+
 /* the statusbar names the active database next to the project */
 function reflectDb() {
   if (project) {

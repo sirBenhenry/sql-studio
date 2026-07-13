@@ -156,6 +156,7 @@ fn connect(port: u16) -> Result<Pool, String> {
     Pool::new(opts).map_err(|e| e.to_string())
 }
 
+#[cfg(test)] // production startup uses the child-watching loop in db_start
 fn wait_ready(port: u16, timeout: Duration) -> Result<Pool, String> {
     let deadline = Instant::now() + timeout;
     let mut last = String::new();
@@ -295,18 +296,38 @@ pub async fn db_start(
     eng.child = Some(child);
     eng.port = port;
 
-    match wait_ready(port, Duration::from_secs(40)) {
-        Ok(pool) => {
-            eng.pool = Some(pool);
-            Ok(EngineInfo {
-                running: true,
-                port,
-            })
+    // readiness wait that also watches the child: a mysqld that exits
+    // immediately (port conflict, corrupt datadir) must fail NOW with a
+    // pointer to its error log, not after the full 40s
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let mut last = String::new();
+    loop {
+        if let Some(child) = eng.child.as_mut() {
+            if let Ok(Some(status)) = child.try_wait() {
+                eng.shutdown();
+                return Err(format!(
+                    "the engine exited during startup ({status}) — check the newest .err file in {}",
+                    datadir.display()
+                ));
+            }
         }
-        Err(e) => {
+        match connect(port) {
+            Ok(pool) => match pool.get_conn() {
+                Ok(mut c) => {
+                    if c.query_drop("SELECT 1").is_ok() {
+                        eng.pool = Some(pool);
+                        return Ok(EngineInfo { running: true, port });
+                    }
+                }
+                Err(e) => last = e.to_string(),
+            },
+            Err(e) => last = e,
+        }
+        if Instant::now() > deadline {
             eng.shutdown();
-            Err(e)
+            return Err(format!("engine did not become ready: {last}"));
         }
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -318,9 +339,18 @@ pub async fn db_stop(state: tauri::State<'_, EngineState>) -> Result<(), String>
 
 #[tauri::command]
 pub async fn db_status(state: tauri::State<'_, EngineState>) -> Result<EngineInfo, String> {
-    let eng = state.0.lock().map_err(|e| e.to_string())?;
+    let mut eng = state.0.lock().map_err(|e| e.to_string())?;
+    // a dead child means not running, whatever the pool believes — the
+    // heartbeat relies on this being honest
+    if let Some(child) = eng.child.as_mut() {
+        if let Ok(Some(_)) = child.try_wait() {
+            eng.child = None;
+            eng.pool = None;
+            eng.port = 0;
+        }
+    }
     Ok(EngineInfo {
-        running: eng.pool.is_some(),
+        running: eng.pool.is_some() && eng.child.is_some(),
         port: eng.port,
     })
 }
