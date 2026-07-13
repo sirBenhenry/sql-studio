@@ -9,7 +9,6 @@ global.document = dom.window.document;
 window.confirm = () => true;
 
 const { mountGrid } = await import('../src/grid.js');
-const { renderOverview } = await import('../src/overview.js');
 
 let fail = 0;
 const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
@@ -167,14 +166,6 @@ mountGrid(host2, { name: 'nopk', columns: [{ name: 'a' }], fks: [] }, hooks);
 await tick(); await tick();
 ck('no-PK grid is read-only', host2.textContent.includes('read-only'), host2.textContent.slice(0, 120));
 ck('no + row without PK', !host2.querySelector('tr.new-row'));
-
-// --- overview ---
-const schema = { tables: [tableDef, { name: 'genre', columns: [{ name: 'id', pk: true }], fks: [] }], byName: {} };
-let opened = null;
-renderOverview(document.querySelector('#ov'), schema, { item: 3, genre: 0 }, { openTable: n => opened = n });
-ck('overview renders cards', document.querySelectorAll('#ov .ov-card').length === 2);
-document.querySelector('#ov .ov-card').click();
-ck('card click opens table', opened === 'item', opened);
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);

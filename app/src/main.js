@@ -79,7 +79,7 @@ function wireSettingsUI() {
   seg('#set-theme', () => SETTINGS.theme, v => { SETTINGS.theme = v; applyTheme(); });
   seg('#set-lang', () => SETTINGS.lang, v => {
     SETTINGS.lang = v;
-    if (LANG !== v) { LANG = v; localStorage.setItem('sqlstudio.lang', v); applyLang(); if (builder) builder.setLang(v); }
+    if (LANG !== v) { LANG = v; applyLang(); if (builder) builder.setLang(v); }
   });
   seg('#set-confirm', () => (SETTINGS.confirmDelete ? 'on' : 'off'), v => { SETTINGS.confirmDelete = v === 'on'; });
 
@@ -1092,25 +1092,6 @@ async function appendData() {
   scheduleSnapshot();
 }
 
-/** the builder applied schema statements (CREATE/ALTER): append them to
- *  schema.sql — never replace the file — and re-feed the builder's model */
-async function appendSchema(sql) {
-  const t = tabById('schema');
-  if (!t) return;
-  let cur = t.content;
-  if (cur && !cur.endsWith('\n')) cur += '\n';
-  cur += '\n' + sql.trim() + '\n';
-  t.content = cur;
-  try {
-    await invoke('file_write', { rel: 'schema.sql', content: cur });
-    t.savedContent = cur;
-    if (activeTab === 'schema') setEditorText(cur);
-    renderTabs();
-    logNote('schema.sql updated');
-  } catch (e) { logErr('schema.sql write failed: ' + e); }
-  if (builder) builder.setSchema(cur);
-}
-
 /* the quiet signal that the builder re-read the schema (replaces the lite
    tool's big toast, which the shim now hides) */
 function flashBuilderSync() {
@@ -1124,7 +1105,6 @@ function flashBuilderSync() {
 builder = mountBuilder($('#builder-host'), {
   runScript,
   appendData,
-  appendSchema,
   /* live values for the FK-by-name autocomplete: real rows, fuzzy-matched */
   async lookupValues(table, column, prefix) {
     if (!engineRunning || !currentDb) return [];
