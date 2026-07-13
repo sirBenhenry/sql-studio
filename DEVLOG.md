@@ -82,3 +82,23 @@ pushed commit.
 
 Final state: 7 JS suites + 3 cargo tests green; debug exe rebuilt and
 running; release installer in src-tauri/target/release/bundle/nsis/.
+
+## Round 3 — documentation + last touches
+
+14. **CLAUDE.md re-synced** — sync model gained its file→DB direction and the
+    import path; module map covers tour.js/batch/query tabs/redo/error hints;
+    test list current; installer-verification step recorded. Memory updated.
+15. **README covers the IDE** — the repo front page only described the lite
+    tool; the IDE now gets top billing (features + build line). SETUP.md test
+    list completed (all 7 suites).
+16. **Journal tab opens at its newest entries** (scroll-to-bottom on
+    activate).
+
+## Deliberately NOT done (needs Ben)
+
+- P9 external-server deploy (connection manager, credentials) — too much
+  invented UX to build unsupervised, and no server here to test against.
+- A run affordance for saved query files — Ben redirected the last proposal
+  to "+ to file"; whether re-running belongs on the tab needs his call.
+- Editor line numbers, canvas relationship labels — cosmetic inventions,
+  his taste decides.
