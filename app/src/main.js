@@ -7,6 +7,7 @@ import { mountBuilder } from './builder-shim.js';
 import { mountGrid } from './grid.js';
 import { mountTablesDesigner, createTableDDL } from './tables-designer.js';
 import { mountCanvasView } from './canvas-view.js';
+import { runTour } from './tour.js';
 
 const { invoke } = window.__TAURI__.core;
 const { open: openDialog } = window.__TAURI__.dialog;
@@ -81,6 +82,12 @@ function wireSettingsUI() {
     if (LANG !== v) { LANG = v; localStorage.setItem('sqlstudio.lang', v); applyLang(); if (builder) builder.setLang(v); }
   });
   seg('#set-confirm', () => (SETTINGS.confirmDelete ? 'on' : 'off'), v => { SETTINGS.confirmDelete = v === 'on'; });
+
+  $('#set-tour').addEventListener('click', () => {
+    openClose(false);
+    if (project) startAppTour();
+    else toast('Open a project first — the tour walks through a real workspace.');
+  });
 
   $('#set-rowlimit').addEventListener('change', e => {
     const n = parseInt(e.target.value, 10);
@@ -191,6 +198,11 @@ function enterProject(p) {
   ];
   activateTab('schema');
   logNote('project opened: ' + p.root);
+
+  // first project ever → walk the whole workflow once
+  let toured = null;
+  try { toured = localStorage.getItem('sqlstudio.toured'); } catch { /* ignore */ }
+  if (!toured) setTimeout(startAppTour, 700);
 }
 
 /* ================= tabs + editor ================= */
@@ -789,6 +801,107 @@ $('#console-input').addEventListener('keydown', e => {
   // typed console statements are ad-hoc: executed but not journaled
   runScript(sql, 'console', { journal: false });
 });
+
+/* ================= onboarding tour ================= */
+
+function startAppTour() {
+  const dbSeg = label => {
+    const b = [...document.querySelectorAll('.dbtab-bar .seg button')].find(x => x.textContent === label);
+    if (b && !b.classList.contains('active')) b.click();
+  };
+  const settle = ms => new Promise(r => setTimeout(r, ms));
+  runTour([
+    {
+      target: null,
+      title: 'This folder IS a database',
+      text: 'Your project is a normal folder with plain files in it — and while it\'s open, ' +
+        'a private MySQL server runs on exactly those files. Everything you apply happens ' +
+        'in both places at once: the live database and the files. Copy the folder, and ' +
+        'you\'ve copied the database.'
+    },
+    {
+      target: '#file-tabs',
+      title: 'The files',
+      prep: () => activateTab('schema'),
+      text: 'schema.sql defines the database — SQL Studio edits it live as you design. ' +
+        'data.sql is a snapshot of all the data. journal.sql records every change ever applied. ' +
+        '"+ query" adds a file for questions worth keeping.'
+    },
+    {
+      target: '#editor-host',
+      title: 'The editor',
+      text: 'Files open here with SQL highlighting. You can always just type — Ctrl+S saves.'
+    },
+    {
+      target: '#view-host',
+      title: 'Your database, drawn',
+      prep: async () => { activateTab('db'); dbSeg('View'); await settle(120); },
+      text: 'Every table is a card and every foreign key a real line between them. Drag cards ' +
+        'to arrange, drag the background to pan, ctrl+wheel zooms. The ▦ on a card opens ' +
+        'that table\'s data.'
+    },
+    {
+      target: '#view-host',
+      title: 'The live designer',
+      prep: async () => { activateTab('db'); dbSeg('Edit'); await settle(120); },
+      text: 'Flip to Edit and change anything — it applies the moment you click away. ' +
+        'The properties button on each column holds NOT NULL, defaults, allowed ranges and ' +
+        'foreign keys; the black tags show what\'s set, and clicking a tag removes it. ' +
+        'Dropping things asks first. Ctrl+Z undoes.'
+    },
+    {
+      target: '#view-host',
+      title: 'Tables are spreadsheets',
+      when: () => schemaModel().tables.length > 0,
+      prep: async () => { openTableGrid(schemaModel().tables[0].name); await settle(250); },
+      text: 'Double-click a cell to edit — clicking away commits, Escape cancels. The bottom ' +
+        'row inserts, ✕ deletes (with a confirm). Foreign-key fields search the referenced ' +
+        'table as you type, so you pick the row, not remember its id.'
+    },
+    {
+      target: '#builder-pane',
+      title: 'The builder',
+      text: 'Ask questions and change data with words instead of syntax: SELECT, INSERT, ' +
+        'UPDATE, DELETE. Every underlined word is clickable, and your foreign keys power ' +
+        'the suggestions. (Tables themselves are designed in ⊞ database.)'
+    },
+    {
+      target: '#builder-pane',
+      title: 'Run, keep, apply',
+      text: 'The bar at the builder\'s bottom always shows the SQL it built. ▶ Run executes ' +
+        'a SELECT and shows results in the console; "+ to file" keeps a good query in ' +
+        'queries/. ✓ Apply executes a change — and records it in your files and journal ' +
+        'in the same breath.'
+    },
+    {
+      target: '#lang-toggle',
+      title: 'Two languages, one builder',
+      text: 'Natural reads like a sentence; SQL shows the real statement skeleton. It\'s the ' +
+        'same query either way — flip whenever you like.'
+    },
+    {
+      target: '#console-pane',
+      title: 'The console',
+      text: 'Results land here. You can also type SQL directly and press Enter — it runs, but ' +
+        'is deliberately NOT recorded in the journal: scratch space. ↑ recalls your history.'
+    },
+    {
+      target: '#engine-status',
+      title: 'Your private MySQL',
+      text: 'This is the real MySQL server running on your project folder — status and port. ' +
+        'Nothing leaves your machine, and any copy of the folder rebuilds the same database ' +
+        'from its files.'
+    },
+    {
+      target: '#btn-settings',
+      title: 'Make it yours',
+      text: 'Theme, builder wording, row limits and delete confirmations live in Settings — ' +
+        'and you can replay this tour from there anytime. Have fun!'
+    }
+  ], {
+    onEnd: () => { try { localStorage.setItem('sqlstudio.toured', '1'); } catch { /* ignore */ } }
+  });
+}
 
 /* ================= FK row search (grid + builder share it) ================= */
 

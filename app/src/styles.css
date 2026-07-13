@@ -195,6 +195,34 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
+/* ================= onboarding tour ================= */
+.tour-ring {
+  position: fixed; z-index: 300; pointer-events: none;
+  border: 2px solid var(--accent); border-radius: 3px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45);
+  transition: left .25s ease, top .25s ease, width .25s ease, height .25s ease;
+}
+.tour-box {
+  position: fixed; z-index: 301; width: 340px; max-width: calc(100vw - 24px);
+  background: var(--bg); border: 1px solid var(--rule);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .35);
+  padding: 14px 16px 12px;
+}
+.tour-step {
+  font-size: .6rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 4px;
+}
+.tour-box h4 { margin: 0 0 6px; font-size: 1rem; letter-spacing: -.01em; }
+.tour-box p { margin: 0; font-size: .82rem; line-height: 1.55; color: var(--ink); }
+.tour-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.tour-spacer { flex: 1; }
+.tour-skiplink {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--muted); font-size: .7rem; font-family: inherit;
+  text-decoration: underline dotted;
+}
+.tour-skiplink:hover { color: var(--accent); }
+
 /* while a splitter drags, the iframe must not swallow the mouse */
 body.split-drag iframe { pointer-events: none; }
 body.split-drag { user-select: none; }
