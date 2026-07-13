@@ -134,6 +134,17 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
     confirms, tested both ways. Plus errno 1046 hint (import without USE).
     Clippy: clean.
 
+## Round 6 — generator sweep
+
+25. **Backslash corruption fixed (lite tool, fix-level change):** `escStr`
+    only doubled quotes — MySQL's default sql_mode treats backslash as an
+    escape, so every builder literal containing one (paths!) silently
+    corrupted ('C:\tmp' stored a TAB). Now doubled, matching the snapshot's
+    escaping; pinned in test-core; extraction re-run.
+26. **Console multiline** — the input is a textarea: Shift+Enter for a new
+    line, Enter runs, auto-grows to 120px; ↑/↓ history stays on single-line
+    drafts.
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much
@@ -142,3 +153,7 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
   to "+ to file"; whether re-running belongs on the tab needs his call.
 - Editor line numbers, canvas relationship labels — cosmetic inventions,
   his taste decides.
+- Reserved-word identifiers in the BUILDER (a table named `order` generates
+  unbackticked SQL → 1064 with a hint). The designer backticks everything;
+  backticking the builder's output changes the lite tool's whole rendered
+  aesthetic — Ben's call.
