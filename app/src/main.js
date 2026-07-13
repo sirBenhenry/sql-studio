@@ -7,7 +7,7 @@ import { mountBuilder } from './builder-shim.js';
 import { mountGrid } from './grid.js';
 import { mountTablesDesigner, createTableDDL } from './tables-designer.js';
 import { mountCanvasView } from './canvas-view.js';
-import { runTour } from './tour.js';
+import { runTour, pressPulse } from './tour.js';
 
 const { invoke } = window.__TAURI__.core;
 const { open: openDialog } = window.__TAURI__.dialog;
@@ -805,11 +805,34 @@ $('#console-input').addEventListener('keydown', e => {
 /* ================= onboarding tour ================= */
 
 function startAppTour() {
+  const settle = ms => new Promise(r => setTimeout(r, ms));
+  const dbTabBtn = () => [...document.querySelectorAll('#file-tabs .ftab')].find(b => b.textContent.includes('⊞ database'));
+  const segBtn = label => [...document.querySelectorAll('.dbtab-bar .seg button')].find(x => x.textContent === label);
   const dbSeg = label => {
-    const b = [...document.querySelectorAll('.dbtab-bar .seg button')].find(x => x.textContent === label);
+    const b = segBtn(label);
     if (b && !b.classList.contains('active')) b.click();
   };
-  const settle = ms => new Promise(r => setTimeout(r, ms));
+  /* elements inside the builder iframe: click via contentDocument, ring via
+     the element's rect offset by the iframe's own position */
+  const bFrame = () => document.querySelector('#builder-frame');
+  const bEl = sel => {
+    const f = bFrame();
+    return (f && f.contentDocument) ? f.contentDocument.querySelector(sel) : null;
+  };
+  const bRect = sel => {
+    const f = bFrame();
+    const t = bEl(sel);
+    if (!f || !t) return null;
+    const fr = f.getBoundingClientRect();
+    const r = t.getBoundingClientRect();
+    return { left: fr.left + r.left, top: fr.top + r.top, width: r.width, height: r.height };
+  };
+  const bMode = async sel => {
+    await pressPulse(bRect(sel));
+    const t = bEl(sel);
+    if (t) t.click();
+    await settle(120);
+  };
   runTour([
     {
       target: null,
@@ -835,43 +858,91 @@ function startAppTour() {
     {
       target: '#view-host',
       title: 'Your database, drawn',
-      prep: async () => { activateTab('db'); dbSeg('View'); await settle(120); },
-      text: 'Every table is a card and every foreign key a real line between them. Drag cards ' +
-        'to arrange, drag the background to pan, ctrl+wheel zooms. The ▦ on a card opens ' +
-        'that table\'s data.'
+      prep: async () => {
+        await pressPulse(dbTabBtn());   // show WHERE we're going
+        activateTab('db');
+        dbSeg('View');
+        await settle(120);
+      },
+      text: 'That was the ⊞ database tab. Every table is a card and every foreign key a ' +
+        'real line between them. Drag cards to arrange, drag the background to pan, ' +
+        'ctrl+wheel zooms. The ▦ on a card opens that table\'s data.'
     },
     {
       target: '#view-host',
       title: 'The live designer',
-      prep: async () => { activateTab('db'); dbSeg('Edit'); await settle(120); },
-      text: 'Flip to Edit and change anything — it applies the moment you click away. ' +
-        'The properties button on each column holds NOT NULL, defaults, allowed ranges and ' +
-        'foreign keys; the black tags show what\'s set, and clicking a tag removes it. ' +
-        'Dropping things asks first. Ctrl+Z undoes.'
+      prep: async () => {
+        activateTab('db');
+        await pressPulse(segBtn('Edit'));
+        dbSeg('Edit');
+        await settle(120);
+      },
+      text: 'The View | Edit switch at the top flips to the designer. Change anything — it ' +
+        'applies the moment you click away. The properties button on each column holds ' +
+        'NOT NULL, defaults, allowed ranges and foreign keys; the black tags show what\'s ' +
+        'set, and clicking a tag removes it. Dropping things asks first. Ctrl+Z undoes.'
     },
     {
       target: '#view-host',
       title: 'Tables are spreadsheets',
       when: () => schemaModel().tables.length > 0,
-      prep: async () => { openTableGrid(schemaModel().tables[0].name); await settle(250); },
-      text: 'Double-click a cell to edit — clicking away commits, Escape cancels. The bottom ' +
-        'row inserts, ✕ deletes (with a confirm). Foreign-key fields search the referenced ' +
-        'table as you type, so you pick the row, not remember its id.'
+      prep: async () => {
+        activateTab('db');
+        dbSeg('View');
+        await settle(150);
+        await pressPulse(document.querySelector('.cv-card .iconbtn'));
+        openTableGrid(schemaModel().tables[0].name);
+        await settle(250);
+      },
+      text: 'The ▦ on a card opened this. Double-click a cell to edit — clicking away ' +
+        'commits, Escape cancels. The bottom row inserts, ✕ deletes (with a confirm). ' +
+        'Foreign-key fields search the referenced table as you type, so you pick the row ' +
+        'instead of remembering its id.'
     },
     {
       target: '#builder-pane',
       title: 'The builder',
-      text: 'Ask questions and change data with words instead of syntax: SELECT, INSERT, ' +
-        'UPDATE, DELETE. Every underlined word is clickable, and your foreign keys power ' +
-        'the suggestions. (Tables themselves are designed in ⊞ database.)'
+      text: 'Ask questions and change data with words instead of syntax. The tabs at its top ' +
+        'are the four things you can do — let\'s click through each one. (Tables themselves ' +
+        'are designed in ⊞ database, so there\'s no CREATE tab here.)'
     },
     {
-      target: '#builder-pane',
+      target: () => bRect('#tab-select'),
+      title: 'SELECT — ask questions',
+      prep: () => bMode('#tab-select'),
+      text: 'Build a question from the word bank below: pick the table, columns, conditions, ' +
+        'grouping, sorting. Foreign keys power join suggestions, and the finished query ' +
+        'reads like a sentence.'
+    },
+    {
+      target: () => bRect('#tab-insert'),
+      title: 'INSERT — add rows',
+      prep: () => bMode('#tab-insert'),
+      text: 'Fill a row and apply it. "＋ apply + next row" saves as you go, applied rows ' +
+        'stay visible above, and foreign-key fields search the referenced table while ' +
+        'you type.'
+    },
+    {
+      target: () => bRect('#tab-update'),
+      title: 'UPDATE — change rows',
+      prep: () => bMode('#tab-update'),
+      text: 'Pick what to set and which rows it hits — the conditions use the same popover ' +
+        'as SELECT, including lookups by name and mini-queries.'
+    },
+    {
+      target: () => bRect('#tab-delete'),
+      title: 'DELETE — remove rows',
+      prep: () => bMode('#tab-delete'),
+      text: 'Choose the rows by condition and apply. Like every change, it executes on the ' +
+        'live database AND is recorded in your files — nothing happens silently.'
+    },
+    {
+      target: () => bRect('#ide-actionbar'),
       title: 'Run, keep, apply',
-      text: 'The bar at the builder\'s bottom always shows the SQL it built. ▶ Run executes ' +
-        'a SELECT and shows results in the console; "+ to file" keeps a good query in ' +
-        'queries/. ✓ Apply executes a change — and records it in your files and journal ' +
-        'in the same breath.'
+      prep: () => bMode('#tab-select'),
+      text: 'This bar always shows the SQL the builder built. ▶ Run executes a SELECT and ' +
+        'shows results in the console; "+ to file" keeps a good query in queries/. ' +
+        '✓ Apply executes changes.'
     },
     {
       target: '#lang-toggle',

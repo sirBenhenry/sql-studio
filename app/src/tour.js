@@ -2,9 +2,30 @@
 // through the whole workflow. Steps are { target, title, text, prep?, when? }:
 // `prep` runs before the step shows (and may drive the UI — switch tabs, open
 // views), `when` decides at start whether the step applies at all.
+// `target` may be a selector, an element, a {left,top,width,height} rect
+// (e.g. an element inside the builder iframe, offset by the iframe's rect),
+// or a function returning any of those.
 'use strict';
 
 let running = false;
+
+/** flash a "this is being clicked" pulse on a control, so tour-driven UI
+ *  switches are traceable — resolves when the pulse ends */
+export function pressPulse(target, doc = document) {
+  let t = typeof target === 'function' ? target() : target;
+  if (typeof t === 'string') t = doc.querySelector(t);
+  if (!t) return Promise.resolve();
+  const r = t.getBoundingClientRect ? t.getBoundingClientRect() : t;
+  if (!r || !('left' in r)) return Promise.resolve();
+  const p = doc.createElement('div');
+  p.className = 'tour-press';
+  p.style.left = (r.left - 4) + 'px';
+  p.style.top = (r.top - 4) + 'px';
+  p.style.width = (r.width + 8) + 'px';
+  p.style.height = (r.height + 8) + 'px';
+  doc.body.appendChild(p);
+  return new Promise(res => setTimeout(() => { p.remove(); res(); }, 650));
+}
 
 export function runTour(allSteps, opts = {}) {
   if (running) return;
@@ -36,12 +57,26 @@ export function runTour(allSteps, opts = {}) {
     if (opts.onEnd) opts.onEnd();
   }
 
+  function rectOf(s) {
+    let t = s.target;
+    if (typeof t === 'function') t = t();
+    if (!t) return null;
+    if (typeof t === 'string') t = doc.querySelector(t);
+    if (!t) return null;
+    if (t.getBoundingClientRect) t = t.getBoundingClientRect();
+    if (!('left' in t)) return null;
+    return {
+      left: t.left, top: t.top, width: t.width, height: t.height,
+      right: t.right != null ? t.right : t.left + t.width,
+      bottom: t.bottom != null ? t.bottom : t.top + t.height
+    };
+  }
+
   function position(s) {
-    const t = s.target ? doc.querySelector(s.target) : null;
+    const r = rectOf(s);
     const vw = doc.documentElement.clientWidth || 1200;
     const vh = doc.documentElement.clientHeight || 800;
-    if (t) {
-      const r = t.getBoundingClientRect();
+    if (r) {
       ring.style.left = (r.left - 6) + 'px';
       ring.style.top = (r.top - 6) + 'px';
       ring.style.width = (r.width + 12) + 'px';

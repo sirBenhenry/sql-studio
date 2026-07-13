@@ -5,7 +5,7 @@ const dom = new JSDOM('<div id="a">A</div><div id="b">B</div>', { url: 'http://l
 global.window = dom.window;
 global.document = dom.window.document;
 
-const { runTour } = await import('../src/tour.js');
+const { runTour, pressPulse } = await import('../src/tour.js');
 
 let fail = 0;
 const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
@@ -69,6 +69,27 @@ const clickBtn = label => [...document.querySelectorAll('.tour-box button')].fin
     .find(b => b.textContent === 'skip the tour').click();
   await tick(20);
   ck('skip link ends the tour', !document.querySelector('.tour-box'));
+}
+
+/* ---- rect/function targets (iframe elements) + the press pulse ---- */
+{
+  runTour([
+    { target: () => ({ left: 100, top: 50, width: 80, height: 20 }), title: 'RectStep', text: 'x' }
+  ]);
+  await tick(20);
+  const ring = document.querySelector('.tour-ring');
+  ck('function target returning a rect rings correctly',
+    ring.style.left === '94px' && ring.style.top === '44px' && ring.style.width === '92px',
+    ring.style.left + '/' + ring.style.top + '/' + ring.style.width);
+  document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await tick(20);
+
+  const pulseDone = pressPulse({ left: 10, top: 10, width: 40, height: 20 }, document);
+  const p = document.querySelector('.tour-press');
+  ck('press pulse appears', !!p && p.style.left === '6px', p && p.style.left);
+  await pulseDone;
+  ck('press pulse cleans itself up', !document.querySelector('.tour-press'));
+  ck('pulse on a missing target resolves harmlessly', await pressPulse('#nope', document) === undefined);
 }
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');

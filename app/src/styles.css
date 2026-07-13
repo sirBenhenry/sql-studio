@@ -222,6 +222,19 @@ code { font-family: var(--mono); background: color-mix(in srgb, var(--ink) 7%, t
   text-decoration: underline dotted;
 }
 .tour-skiplink:hover { color: var(--accent); }
+/* the "this is being clicked" pulse when the tour drives the UI */
+.tour-press {
+  position: fixed; z-index: 302; pointer-events: none;
+  border: 2px solid var(--accent); border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: tour-press .65s ease;
+}
+@keyframes tour-press {
+  0% { transform: scale(1.35); opacity: 0; }
+  35% { transform: scale(1); opacity: 1; }
+  75% { opacity: 1; }
+  100% { transform: scale(.96); opacity: .2; }
+}
 
 /* while a splitter drags, the iframe must not swallow the mouse */
 body.split-drag iframe { pointer-events: none; }
