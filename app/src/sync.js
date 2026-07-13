@@ -92,7 +92,11 @@ export function snapshotTableOrder(model) {
 
 /** The text data.sql gets on snapshot: one multi-row INSERT per non-empty
  *  table. dumps: [{name, columns, rows}] — order is fixed here, not by the
- *  caller. Values arrive as strings (or null) from db_exec. */
+ *  caller. Values arrive as strings (or null) from db_exec.
+ *  FK checks are suspended for the replay: dependency order handles the
+ *  common case, but a self-reference to a HIGHER id (Anna invited by Carla)
+ *  or an FK cycle can't be row-ordered away. Seeds run the whole file on one
+ *  connection (db_exec_batch), so the session var actually holds. */
 export function buildDataSnapshot(model, dumps) {
   const byName = {};
   for (const d of dumps) byName[d.name] = d;
@@ -101,6 +105,8 @@ export function buildDataSnapshot(model, dumps) {
   const lines = [
     '-- data.sql — the project\'s data. SQL Studio snapshots the live data here',
     '-- after every applied change, so the project can rebuild from its files.',
+    '',
+    'SET FOREIGN_KEY_CHECKS = 0;',
     ''
   ];
   for (const name of order) {
@@ -117,6 +123,8 @@ export function buildDataSnapshot(model, dumps) {
     lines.push(d.rows.map(r => ' (' + r.map((v, i) => lit(v, d.columns[i])).join(', ') + ')').join(',\n') + ';');
     lines.push('');
   }
+  lines.push('SET FOREIGN_KEY_CHECKS = 1;');
+  lines.push('');
   return lines.join('\n');
 }
 

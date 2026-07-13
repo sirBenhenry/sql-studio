@@ -89,7 +89,11 @@ ck('snapshot dumps person before task', snap.indexOf('INSERT INTO `person`') < s
 ck('snapshot: numeric cols unquoted', snap.includes("(1, 2, 'it''s; done')"), snap);
 ck('snapshot: NULL and backslash escaping', snap.includes("(2, NULL, 'C:\\\\tmp')"), snap);
 ck('snapshot: empty tables omitted', !snap.includes('empty_one'), snap);
-ck('snapshot: replayable by splitSQL', splitSQL(snap).length === 2, JSON.stringify(splitSQL(snap)));
+ck('snapshot: FK checks suspended around the inserts (self-refs to higher ids, cycles)',
+  snap.indexOf('SET FOREIGN_KEY_CHECKS = 0;') > -1 &&
+  snap.indexOf('SET FOREIGN_KEY_CHECKS = 0;') < snap.indexOf('INSERT INTO `person`') &&
+  snap.lastIndexOf('SET FOREIGN_KEY_CHECKS = 1;') > snap.indexOf('INSERT INTO `task`'), snap);
+ck('snapshot: replayable by splitSQL', splitSQL(snap).length === 4, JSON.stringify(splitSQL(snap)));
 
 // --- explainError ---
 ck('1062 duplicate names the value',
