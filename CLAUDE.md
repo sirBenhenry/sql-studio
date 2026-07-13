@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `versions/vN/` holds frozen snapshots of the lite tool (v2 = the current frozen state); the root `sql-studio.html` is the working build. The lite tool is feature-frozen while the IDE is built — fixes only (the parser has since gained additive fields for the IDE; that counts as a fix because the IDE consumes it).
 
-**Where the work stands:** `AUDIT.md` is the living work queue — a full ranked findings pass with a STATUS section recording what's fixed (with commit ranges) and what's open. Read it before picking new work. `test_project_1`/`test_project_2` are the user's local test projects (gitignored); test 2 holds the "film club" schema (member/movie/screening) used for interactive debugging.
+**Where the work stands:** `PLAN.md` and `AUDIT.md` are both **completed, archival documents** — the plan was executed and every audit finding addressed; don't treat either as a work queue. New work comes from the user. `test_project_1`/`test_project_2` are the user's local test projects (gitignored); test 2 holds the "film club" schema (member/movie/screening) used for interactive debugging.
 
 ## The extraction contract (critical)
 

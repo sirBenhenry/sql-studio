@@ -5,12 +5,12 @@ Written overnight 2026-07-11 → 12, after the brainstorm + question session wit
 The single-file `sql-studio.html` stays alive as the "lite" web version; the IDE
 lives in `app/` in this same repo.*
 
-> **Historical document.** This is the original design rationale — read it for the
-> WHY. For the architecture as actually built, `CLAUDE.md`; for what's fixed and
-> what's still open, `AUDIT.md` (its STATUS section is the live work queue).
-> Phases P0–P7 shipped (with design pivots: CREATE/ALTER became the live tables
-> designer, the overview became the pan/zoom canvas, data.sql became a snapshot);
-> P8 (error hints, tour, icons, installer) and P9 (external deploy) remain.
+> **COMPLETED — historical document.** The plan was executed; this file is kept
+> for the original design rationale only and is no longer relevant to day-to-day
+> work. The architecture as actually built lives in `CLAUDE.md` (with design
+> pivots along the way: CREATE/ALTER became the live tables designer, the
+> overview became the pan/zoom canvas, data.sql became a snapshot). `AUDIT.md`
+> is likewise a completed, archival record.
 
 ---
 

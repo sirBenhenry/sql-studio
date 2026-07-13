@@ -1,5 +1,11 @@
 # AUDIT.md — full findings pass (2026-07-12)
 
+> **COMPLETED — archival record.** Everything this audit set out to fix was
+> fixed in the two same-day rounds recorded below; the document is kept as
+> history, not as a work queue. Current guidance lives in `CLAUDE.md`; new
+> work comes from the user, not from this file. (The "STILL OPEN" list at the
+> bottom of the STATUS section is a grab-bag of ideas, nothing more.)
+
 A complete read of the IDE (`app/src/*`, `app/src-tauri/src/*`, shell, styles, scripts)
 plus the extraction/parser surface it depends on. Ranked by severity. Baseline:
 all five JS suites + both cargo tests green before and after this audit.
