@@ -18,7 +18,7 @@ vm.createContext(sb);
 vm.runInContext(readFileSync(join(here, '..', 'src', 'core', 'parser.js'), 'utf8'), sb);
 const parseSchema = sb.window.parseSchema;
 
-const { mountTablesDesigner, createTableDDL, colDDL, normalizeArgs } = await import('../src/tables-designer.js');
+const { mountTablesDesigner, createTableDDL, colDDL, normalizeArgs, modelFromSchema, diffModels } = await import('../src/tables-designer.js');
 
 let fail = 0;
 const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
@@ -534,6 +534,53 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   undoBtn().click();
   await tick(400);
   ck('undo drops the added column', ranU.some(s => s.includes('DROP COLUMN `extra`')), JSON.stringify(ranU));
+}
+
+// ---- diffModels: the file→DB direction (Ctrl+S on schema.sql) ----
+{
+  const db = () => modelFromSchema(parseSchema(
+    'CREATE TABLE person (id INT UNSIGNED NOT NULL AUTO_INCREMENT, name VARCHAR(40) NOT NULL, age INT, PRIMARY KEY(id));\n' +
+    'CREATE TABLE task (id INT UNSIGNED NOT NULL AUTO_INCREMENT, person_id INT UNSIGNED NOT NULL,\n' +
+    ' PRIMARY KEY(id), FOREIGN KEY(person_id) REFERENCES person(id) ON DELETE SET NULL);'));
+  const file = txt => modelFromSchema(parseSchema(txt));
+
+  // identical file → empty diff
+  const same = diffModels(file(
+    'CREATE TABLE person (id INT UNSIGNED NOT NULL AUTO_INCREMENT, name VARCHAR(40) NOT NULL, age INT, PRIMARY KEY(id));\n' +
+    'CREATE TABLE task (id INT UNSIGNED NOT NULL AUTO_INCREMENT, person_id INT UNSIGNED NOT NULL,\n' +
+    ' PRIMARY KEY(id), FOREIGN KEY(person_id) REFERENCES person(id) ON DELETE SET NULL);'), db());
+  ck('identical file diffs to nothing', same.stmts.length === 0 && same.fixups.length === 0,
+    JSON.stringify(same.stmts.concat(same.fixups)));
+
+  // edits: type change, new column, dropped column, new table, dropped table
+  const d2 = diffModels(file(
+    'CREATE TABLE person (id INT UNSIGNED NOT NULL AUTO_INCREMENT, name VARCHAR(80) NOT NULL, city VARCHAR(30), PRIMARY KEY(id));\n' +
+    'CREATE TABLE note (id INT UNSIGNED NOT NULL AUTO_INCREMENT, txt VARCHAR(200), PRIMARY KEY(id));'), db());
+  ck('type change → MODIFY', d2.stmts.some(s => s.includes('MODIFY `name` VARCHAR(80) NOT NULL')), JSON.stringify(d2.stmts));
+  ck('new column → ADD', d2.stmts.some(s => s.includes('ADD `city` VARCHAR(30)')), JSON.stringify(d2.stmts));
+  ck('dropped column → DROP COLUMN (destructive)',
+    d2.stmts.some(s => s.includes('DROP COLUMN `age`')) && d2.destructive.some(x => x.includes('age')));
+  ck('new table → CREATE', d2.stmts.some(s => s.startsWith('CREATE TABLE `note`')));
+  ck('dropped table → DROP TABLE (destructive)',
+    d2.stmts.some(s => s === 'DROP TABLE `task`') && d2.destructive.some(x => x.includes('task')));
+
+  // FK rule changed in the file → drop + re-add
+  const d3 = diffModels(file(
+    'CREATE TABLE person (id INT UNSIGNED NOT NULL AUTO_INCREMENT, name VARCHAR(40) NOT NULL, age INT, PRIMARY KEY(id));\n' +
+    'CREATE TABLE task (id INT UNSIGNED NOT NULL AUTO_INCREMENT, person_id INT UNSIGNED NOT NULL,\n' +
+    ' PRIMARY KEY(id), FOREIGN KEY(person_id) REFERENCES person(id) ON DELETE CASCADE);'), db());
+  ck('FK rule change → dropFk fixup + re-ADD',
+    d3.fixups.some(f => f.dropFk && f.table === 'task') &&
+    d3.stmts.some(s => s.includes('ADD FOREIGN KEY(`person_id`)') && s.includes('ON DELETE CASCADE')),
+    JSON.stringify(d3.fixups.concat(d3.stmts)));
+
+  // FK removed in the file → dropFk fixup, no re-add
+  const d4 = diffModels(file(
+    'CREATE TABLE person (id INT UNSIGNED NOT NULL AUTO_INCREMENT, name VARCHAR(40) NOT NULL, age INT, PRIMARY KEY(id));\n' +
+    'CREATE TABLE task (id INT UNSIGNED NOT NULL AUTO_INCREMENT, person_id INT UNSIGNED NOT NULL, PRIMARY KEY(id));'), db());
+  ck('FK removed in file → dropFk fixup only',
+    d4.fixups.some(f => f.dropFk) && !d4.stmts.some(s => s.includes('ADD FOREIGN KEY')),
+    JSON.stringify(d4.fixups.concat(d4.stmts)));
 }
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');

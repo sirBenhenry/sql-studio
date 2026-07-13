@@ -5,7 +5,7 @@
 import { splitSQL, findCurrentDb, isDbAgnostic, journalEntry, buildDataSnapshot, snapshotTableOrder, explainError } from './sync.js';
 import { mountBuilder } from './builder-shim.js';
 import { mountGrid } from './grid.js';
-import { mountTablesDesigner, createTableDDL } from './tables-designer.js';
+import { mountTablesDesigner, createTableDDL, modelFromSchema, diffModels, resolveFixups } from './tables-designer.js';
 import { mountCanvasView } from './canvas-view.js';
 import { runTour, pressPulse } from './tour.js';
 
@@ -356,21 +356,27 @@ async function writeSchemaFromModel(model) {
 /** Rebuild schema.sql from DB truth (SHOW CREATE TABLE, dependency-ordered).
  *  Used when a partially-applied designer change means the file no longer
  *  matches reality — the database is the only honest source left. */
-async function syncSchemaFromDb() {
-  if (tourDemo) return; // never rebuild the user's schema.sql from the demo db
-  if (!engineRunning || !currentDb) return;
-  const t = tabById('schema');
-  if (!t) return;
-  let shown;
-  try { shown = await invoke('db_exec', { sql: 'SHOW TABLES', db: currentDb }); }
-  catch { return; }
+/** the live database's tables as CREATE TABLE text (SHOW CREATE TABLE) */
+async function fetchDbDDL() {
+  const shown = await invoke('db_exec', { sql: 'SHOW TABLES', db: currentDb });
   const ddl = {};
   for (const row of shown.rows) {
     try {
       const r = await invoke('db_exec', { sql: 'SHOW CREATE TABLE `' + row[0] + '`', db: currentDb });
       if (r.rows.length) ddl[row[0]] = r.rows[0][1] + ';';
-    } catch { /* table vanished mid-sync — skip */ }
+    } catch { /* table vanished mid-fetch — skip */ }
   }
+  return ddl;
+}
+
+async function syncSchemaFromDb() {
+  if (tourDemo) return; // never rebuild the user's schema.sql from the demo db
+  if (!engineRunning || !currentDb) return;
+  const t = tabById('schema');
+  if (!t) return;
+  let ddl;
+  try { ddl = await fetchDbDDL(); }
+  catch { return; }
   const names = Object.keys(ddl);
   // dependency order so the file rebuilds: parse what we got, sort by FK depth
   let order = names;
@@ -390,6 +396,45 @@ async function syncSchemaFromDb() {
     logNote('schema.sql re-synced from the live database');
   } catch (e) { logErr('schema.sql write failed: ' + e); }
   if (builder) builder.setSchema(text);
+}
+
+/** Ctrl+S on schema.sql: the missing sync direction — diff the edited file
+ *  against DB truth (name-matched: a rename in text is a drop + add) and
+ *  apply, confirmed, through the same machinery the designer uses. */
+async function applySchemaFile(t) {
+  let fileModel;
+  try { fileModel = modelFromSchema(window.parseSchema(t.content)); }
+  catch (e) { logErr('schema.sql could not be parsed: ' + e); return false; }
+
+  let dbModel;
+  try { dbModel = modelFromSchema(window.parseSchema(Object.values(await fetchDbDDL()).join('\n'))); }
+  catch (e) { logErr('could not read the live database: ' + e); return false; }
+
+  const { stmts, destructive, fixups } = diffModels(fileModel, dbModel);
+  const pre = await resolveFixups(fixups, async sql => await invoke('db_exec', { sql, db: currentDb }));
+  const all = pre.concat(stmts);
+  if (!all.length) { logNote('schema.sql saved — database already matches'); return true; }
+
+  const headerDb = findCurrentDb(t.content);
+  let msg = 'Saving schema.sql will change the live database:\n\n' +
+    all.map(s => '  ' + s.replace(/\s+/g, ' ').slice(0, 90)).join('\n');
+  if (destructive.length) msg += '\n\n⚠ data is lost by:\n  · ' + destructive.join('\n  · ');
+  if (headerDb && currentDb && headerDb !== currentDb) {
+    msg += '\n\n(note: the database name change "' + currentDb + '" → "' + headerDb +
+      '" is NOT applied live — it only takes effect on a rebuild from files)';
+  }
+  if (!window.confirm(msg + '\n\nApply?')) return false;
+
+  const ok = await runScript(all.join(';\n') + ';', 'schema.sql saved', {
+    journal: true,
+    onPartial: async () => { await syncSchemaFromDb(); }
+  });
+  if (ok) {
+    if (builder) builder.setSchema(t.content);
+    if (activeTab === 'db') { const v = $('#view-host'); if (v) renderDbTab(v); }
+    logOk('database updated from schema.sql');
+  }
+  return ok;
 }
 
 let designer = null;
@@ -505,6 +550,11 @@ async function saveActive() {
   if (tourDemo && t.id === 'schema') {
     toast('that is the tour demo — it is never saved to your files');
     return;
+  }
+  // schema.sql saves are the file→database direction of the sync
+  if (t.id === 'schema' && engineRunning && currentDb) {
+    const applied = await applySchemaFile(t);
+    if (!applied) return; // parse failure or user declined — nothing written
   }
   try {
     await invoke('file_write', { rel: t.rel, content: t.content });

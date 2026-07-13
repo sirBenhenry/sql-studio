@@ -54,7 +54,7 @@ if (typeof document !== 'undefined') {
 }
 
 /** designer model from the shared parser model */
-function modelFromSchema(schema) {
+export function modelFromSchema(schema) {
   return (schema.tables || []).map(t => ({
     _uid: uid(),
     name: t.name,
@@ -212,7 +212,7 @@ function colFixup(t, c) {
 }
 
 /** the diff between the committed snapshot and the live cards */
-function computeDiff(model, snapshotNames) {
+export function computeDiff(model, snapshotNames) {
   const stmts = [];
   const destructive = [];
   const fixups = [];
@@ -280,6 +280,79 @@ function computeDiff(model, snapshotNames) {
     }
   }
   return { stmts, destructive, fixups };
+}
+
+/** File→DB direction: treat `fileModel` as the desired state and `dbModel`
+ *  as reality, matched BY NAME (a rename in text is honestly a drop + add),
+ *  and hand back the designer diff. Both args come from modelFromSchema. */
+export function diffModels(fileModel, dbModel) {
+  const dbByName = {};
+  for (const dt of dbModel) dbByName[dt.name] = dt;
+  for (const ft of fileModel) {
+    const dt = dbByName[ft.name];
+    if (!dt) {
+      ft.origName = null;
+      ft.origCols = [];
+      ft.origFkCols = [];
+      for (const c of ft.cols) c.orig = null;
+      continue;
+    }
+    ft.origName = dt.name;
+    ft.origCols = dt.cols.map(c => c.name);
+    ft.origFkCols = dt.fks.map(f => f.col);
+    for (const c of ft.cols) {
+      const dc = dt.cols.find(x => x.name === c.name);
+      c.orig = dc ? { ...dc.orig } : null;
+    }
+    for (const f of ft.fks) {
+      const df = dt.fks.find(x => x.col === f.col);
+      if (df && (df.refTable !== f.refTable || df.refCol !== f.refCol ||
+          (df.onUpdate || null) !== (f.onUpdate || null) ||
+          (df.onDelete || null) !== (f.onDelete || null))) {
+        f._redo = true; // same column, different target/rules → re-create
+      }
+    }
+  }
+  return computeDiff(fileModel, dbModel.map(dt => dt.name));
+}
+
+/** turn fixups into concrete DROP statements by asking information_schema
+ *  for the auto-generated constraint/index names (best effort — if the
+ *  lookup fails, the worst case is MySQL rejecting and the caller reverting) */
+export async function resolveFixups(fixups, query) {
+  const pre = [];
+  if (!query) return pre;
+  for (const f of fixups) {
+    const tbl = '`' + f.table + '`';
+    try {
+      if (f.dropFk) {
+        const r = await query(
+          "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE " +
+          "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + f.table + "' " +
+          "AND COLUMN_NAME = '" + f.col + "' AND REFERENCED_TABLE_NAME IS NOT NULL");
+        for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP FOREIGN KEY `' + row[0] + '`');
+      }
+      if (f.dropChecks) {
+        const like = f.col.replace(/([\\%_])/g, '\\$1');
+        const r = await query(
+          "SELECT cc.CONSTRAINT_NAME FROM information_schema.CHECK_CONSTRAINTS cc " +
+          "JOIN information_schema.TABLE_CONSTRAINTS tc ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA " +
+          "AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME " +
+          "WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.TABLE_NAME = '" + f.table + "' " +
+          "AND cc.CHECK_CLAUSE LIKE '%`" + like + "`%'");
+        for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP CHECK `' + row[0] + '`');
+      }
+      if (f.dropUnique) {
+        const r = await query(
+          "SELECT INDEX_NAME FROM information_schema.STATISTICS " +
+          "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + f.table + "' " +
+          "AND NON_UNIQUE = 0 AND INDEX_NAME <> 'PRIMARY' " +
+          "GROUP BY INDEX_NAME HAVING COUNT(*) = 1 AND MAX(COLUMN_NAME) = '" + f.col + "'");
+        for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP INDEX `' + row[0] + '`');
+      }
+    } catch { /* engine offline etc. — skip, MySQL will arbitrate */ }
+  }
+  return pre;
 }
 
 export function mountTablesDesigner(host, schema, hooks) {
@@ -356,45 +429,6 @@ export function mountTablesDesigner(host, schema, hooks) {
 
   /* ---------- semi-live commit ---------- */
 
-  /** turn fixups into concrete DROP statements by asking information_schema
-   *  for the auto-generated constraint/index names (best effort — if the
-   *  lookup fails, the worst case is MySQL rejecting and the cards reverting) */
-  async function resolveFixups(fixups) {
-    const pre = [];
-    if (!hooks.query) return pre;
-    for (const f of fixups) {
-      const tbl = '`' + f.table + '`';
-      try {
-        if (f.dropFk) {
-          const r = await hooks.query(
-            "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE " +
-            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + f.table + "' " +
-            "AND COLUMN_NAME = '" + f.col + "' AND REFERENCED_TABLE_NAME IS NOT NULL");
-          for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP FOREIGN KEY `' + row[0] + '`');
-        }
-        if (f.dropChecks) {
-          const like = f.col.replace(/([\\%_])/g, '\\$1');
-          const r = await hooks.query(
-            "SELECT cc.CONSTRAINT_NAME FROM information_schema.CHECK_CONSTRAINTS cc " +
-            "JOIN information_schema.TABLE_CONSTRAINTS tc ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA " +
-            "AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME " +
-            "WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.TABLE_NAME = '" + f.table + "' " +
-            "AND cc.CHECK_CLAUSE LIKE '%`" + like + "`%'");
-          for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP CHECK `' + row[0] + '`');
-        }
-        if (f.dropUnique) {
-          const r = await hooks.query(
-            "SELECT INDEX_NAME FROM information_schema.STATISTICS " +
-            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + f.table + "' " +
-            "AND NON_UNIQUE = 0 AND INDEX_NAME <> 'PRIMARY' " +
-            "GROUP BY INDEX_NAME HAVING COUNT(*) = 1 AND MAX(COLUMN_NAME) = '" + f.col + "'");
-          for (const row of r.rows) pre.push('ALTER TABLE ' + tbl + ' DROP INDEX `' + row[0] + '`');
-        }
-      } catch { /* engine offline etc. — skip, MySQL will arbitrate */ }
-    }
-    return pre;
-  }
-
   async function commit(reason) {
     if (committing) return;
     const { stmts, destructive, fixups } = computeDiff(model, snapshotNames);
@@ -407,7 +441,7 @@ export function mountTablesDesigner(host, schema, hooks) {
     committing = true;
     try {
       let partial = 0;
-      const all = (await resolveFixups(fixups)).concat(stmts);
+      const all = (await resolveFixups(fixups, hooks.query)).concat(stmts);
       // an empty script (e.g. removing an FK the DB no longer has) still
       // refreshes the file below — runScript would just complain
       const ok = all.length
