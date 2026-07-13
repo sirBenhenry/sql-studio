@@ -22,7 +22,8 @@ pub fn run() {
             engine::db_start,
             engine::db_stop,
             engine::db_status,
-            engine::db_exec
+            engine::db_exec,
+            engine::db_exec_batch
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

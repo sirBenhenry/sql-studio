@@ -650,6 +650,30 @@ async function runScript(text, source, opts = {}) {
   return true;
 }
 
+/** run a BIG script in one IPC round-trip (single connection, so USE
+ *  persists) — seeds and imports; the console gets a summary, not an echo
+ *  of every statement. Returns true only if everything applied. */
+async function runScriptFast(text, source, opts = {}) {
+  const stmts = splitSQL(text || '');
+  if (!stmts.length) { logErr('nothing to run'); return false; }
+  if (!engineRunning) { logErr('engine not running'); return false; }
+  let res;
+  try { res = await invoke('db_exec_batch', { stmts, db: currentDb }); }
+  catch (e) { logErr(String(e)); return false; }
+  const named = findCurrentDb(stmts.slice(0, res.applied).join(';\n'));
+  if (named) currentDb = named;
+  if (res.error) {
+    logErr(res.error);
+    logErr('stopped at statement ' + (res.applied + 1) + ' of ' + stmts.length + ':');
+    logStmt(stmts[res.applied]);
+    if (res.applied && opts.journal) await journal(source + ' (partial)', stmts.slice(0, res.applied));
+    return false;
+  }
+  logOk(source + ' — ' + res.applied + ' statement' + (res.applied === 1 ? '' : 's') + ' · ' + res.elapsed_ms + ' ms');
+  if (opts.journal) await journal(source, stmts);
+  return true;
+}
+
 async function journal(source, statements) {
   if (tourDemo) return; // demo activity is not project history
   const entry = journalEntry(source, statements);
@@ -776,10 +800,10 @@ async function reconcile() {
 
     if (!userDbs.length && splitSQL(schemaText).length) {
       logNote('fresh sandbox — building the database from schema.sql…');
-      const ok = await runScript(schemaText, 'seed: schema.sql', { journal: false });
+      const ok = await runScriptFast(schemaText, 'seed: schema.sql', { journal: false });
       const dataText = tabById('data') ? tabById('data').content : '';
       if (ok && splitSQL(dataText).length) {
-        await runScript(dataText, 'seed: data.sql', { journal: false });
+        await runScriptFast(dataText, 'seed: data.sql', { journal: false });
       }
       if (ok) logOk('project database built from files');
     } else {
@@ -921,7 +945,7 @@ async function importDump() {
     ' will run against this project\'s live database.\nTables with the same names may conflict.\n\n' +
     'Afterwards schema.sql and data.sql are regenerated from the database.')) return;
   logNote('importing ' + fname + ' (' + stmts.length + ' statements)…');
-  const ok = await runScript(text, 'import: ' + fname, { journal: false });
+  const ok = await runScriptFast(text, 'import: ' + fname, { journal: false });
   // whatever happened, the files must mirror what the DB is NOW
   await syncSchemaFromDb();
   await snapshotData();

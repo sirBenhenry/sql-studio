@@ -490,6 +490,30 @@ mod tests {
         )
         .unwrap();
 
+        // --- batch semantics: one connection so USE persists; stops at the
+        // first failure and reports how far it got ---
+        {
+            let mut bconn = pool.get_conn().unwrap();
+            let good: Vec<String> = vec![
+                "CREATE DATABASE batchdb".into(),
+                "USE batchdb".into(),
+                "CREATE TABLE b (id INT PRIMARY KEY)".into(),
+                "INSERT INTO b VALUES (1),(2)".into(),
+            ];
+            let (applied, err) = run_batch(&mut bconn, &good);
+            assert_eq!((applied, err), (4, None), "clean batch applies fully");
+            let bad: Vec<String> = vec![
+                "INSERT INTO b VALUES (3)".into(),
+                "INSERT INTO nope VALUES (1)".into(),
+                "INSERT INTO b VALUES (4)".into(),
+            ];
+            let (applied, err) = run_batch(&mut bconn, &bad);
+            assert_eq!(applied, 1, "stops at the first failure");
+            assert!(err.unwrap().contains("1146"), "reports the failing error");
+            let n: Vec<u32> = bconn.query("SELECT COUNT(*) FROM b").unwrap();
+            assert_eq!(n[0], 3, "statement after the failure did NOT run");
+        }
+
         // --- date/time defaults, exactly as the designer emits them:
         // CURRENT_TIMESTAMP bare; CURDATE/CURTIME as (expression) defaults ---
         conn.query_drop(
@@ -555,14 +579,20 @@ mod tests {
     }
 }
 
+/// Grab a cheap Pool handle and RELEASE the engine lock before touching the
+/// database — a slow query must not block db_status or a shutdown request.
+fn pool_handle(state: &tauri::State<'_, EngineState>) -> Result<Pool, String> {
+    let eng = state.0.lock().map_err(|e| e.to_string())?;
+    eng.pool.clone().ok_or_else(|| "engine not running".to_string())
+}
+
 #[tauri::command]
 pub async fn db_exec(
     state: tauri::State<'_, EngineState>,
     sql: String,
     db: Option<String>,
 ) -> Result<ExecResult, String> {
-    let eng = state.0.lock().map_err(|e| e.to_string())?;
-    let pool = eng.pool.as_ref().ok_or("engine not running")?;
+    let pool = pool_handle(&state)?;
     let mut conn = pool.get_conn().map_err(|e| e.to_string())?;
 
     // pooled connections don't remember USE across checkouts — select the
@@ -600,4 +630,55 @@ pub async fn db_exec(
         affected,
         elapsed_ms: start.elapsed().as_millis(),
     })
+}
+
+#[derive(Serialize)]
+pub struct BatchResult {
+    pub applied: usize,
+    pub error: Option<String>,
+    pub elapsed_ms: u128,
+}
+
+/// Run many statements on ONE connection (so `USE` persists across them) with
+/// a single IPC round-trip — imports and file-seeds would otherwise pay per
+/// statement. Stops at the first failure; `applied` says how far it got.
+#[tauri::command]
+pub async fn db_exec_batch(
+    state: tauri::State<'_, EngineState>,
+    stmts: Vec<String>,
+    db: Option<String>,
+) -> Result<BatchResult, String> {
+    let pool = pool_handle(&state)?;
+    let mut conn = pool.get_conn().map_err(|e| e.to_string())?;
+    if let Some(db) = db {
+        let ident = db.replace('`', "");
+        if !ident.is_empty() {
+            conn.query_drop(format!("USE `{ident}`"))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    let start = Instant::now();
+    let (applied, error) = run_batch(&mut conn, &stmts);
+    Ok(BatchResult {
+        applied,
+        error,
+        elapsed_ms: start.elapsed().as_millis(),
+    })
+}
+
+/// sequential batch on one connection: stops at the first failure,
+/// reports how far it got
+fn run_batch(conn: &mut mysql::PooledConn, stmts: &[String]) -> (usize, Option<String>) {
+    let mut applied = 0usize;
+    for stmt in stmts {
+        // query_iter so multi-result statements drain cleanly
+        match conn.query_iter(stmt) {
+            Ok(r) => {
+                drop(r);
+                applied += 1;
+            }
+            Err(e) => return (applied, Some(e.to_string())),
+        }
+    }
+    (applied, None)
 }
