@@ -34,6 +34,18 @@ fn read_or(path: &Path, fallback: &str) -> String {
     fs::read_to_string(path).unwrap_or_else(|_| fallback.to_string())
 }
 
+/// Write via temp-file + rename so a crash mid-write can never leave a
+/// truncated schema.sql/data.sql/journal.sql — the project IS these files.
+fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let tmp = path.with_extension("sql.tmp");
+    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    // std::fs::rename replaces existing files on Windows (MOVEFILE_REPLACE_EXISTING)
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
 fn load(root: &Path) -> Result<Project, String> {
     let name = root
         .file_name()
@@ -131,7 +143,7 @@ pub async fn file_write(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(path, content).map_err(|e| e.to_string())
+    write_atomic(&path, &content)
 }
 
 #[tauri::command]
@@ -179,5 +191,28 @@ pub async fn journal_append(state: tauri::State<'_, ProjectState>, entry: String
     if !entry.ends_with('\n') {
         cur.push('\n');
     }
-    fs::write(path, cur).map_err(|e| e.to_string())
+    write_atomic(&path, &cur)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_atomic_replaces_and_leaves_no_debris() {
+        let dir = std::env::temp_dir().join("sqlstudio-atomic-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("schema.sql");
+        write_atomic(&target, "first").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "first");
+        // the rename must REPLACE an existing file (Windows historically balked)
+        write_atomic(&target, "second").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "second");
+        assert!(
+            !dir.join("schema.sql.tmp").exists() && !target.with_extension("sql.tmp").exists(),
+            "no temp debris"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

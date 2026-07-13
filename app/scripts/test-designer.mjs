@@ -224,11 +224,13 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
     ' PRIMARY KEY(id), FOREIGN KEY(person_id) REFERENCES person(id));');
   const ran3 = [];
   let model3 = null;
+  let renames3 = null;
   const host3 = document.createElement('div');
   document.body.appendChild(host3);
   mountTablesDesigner(host3, schema3, {
     runScript: async sql => { ran3.push(sql); return true; },
     writeSchema: async m => { model3 = m; },
+    onRenames: map => { renames3 = map; },
     openTable: () => {}, reload: () => {}, toast: () => {}
   });
   const tIn = [...host3.querySelectorAll('.dz-tname')].find(i => i.value === 'person');
@@ -241,6 +243,8 @@ ck('drop table → DROP TABLE', ran.some(r => r.sql.includes('DROP TABLE `tag`')
   ck('dependent FK re-pointed to new name', taskT.fks[0].refTable === 'people', JSON.stringify(taskT.fks));
   ck('regenerated task DDL references new name',
     createTableDDL(taskT).includes('REFERENCES `people`(`id`)'), createTableDDL(taskT));
+  ck('host notified of the rename (canvas positions / grid tabs follow)',
+    renames3 && renames3.person === 'people', JSON.stringify(renames3));
 }
 
 // ---- partial failure → schema.sql re-synced from DB truth ----

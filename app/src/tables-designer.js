@@ -576,6 +576,8 @@ export function mountTablesDesigner(host, schema, hooks) {
               if (renamed[fk.refTable]) fk.refTable = renamed[fk.refTable];
             }
           }
+          // the host follows too: canvas positions, open grid tabs…
+          if (hooks.onRenames) hooks.onRenames(renamed);
         }
         // column renames: follow them into FK references and kept-verbatim
         // KEY/CHECK lines (MySQL re-points all of these itself on CHANGE)

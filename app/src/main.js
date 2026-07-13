@@ -248,6 +248,16 @@ function syncHlScroll() {
 }
 editor.addEventListener('scroll', syncHlScroll);
 
+/* Tab indents in a SQL editor — it must not walk focus away */
+editor.addEventListener('keydown', e => {
+  if (e.key !== 'Tab' || editor.readOnly) return;
+  e.preventDefault();
+  const s = editor.selectionStart, epos = editor.selectionEnd;
+  editor.value = editor.value.slice(0, s) + '  ' + editor.value.slice(epos);
+  editor.selectionStart = editor.selectionEnd = s + 2;
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+});
+
 function setEditorText(text) {
   editor.value = text;
   updateHighlight();
@@ -527,7 +537,27 @@ function renderDbTab(host) {
       reload: () => { if (activeTab === 'db') renderDbTab(host); },
       toast,
       // undo survives View↔Edit flips; the tour demo gets its own lane
-      historyKey: project ? project.root + (tourDemo ? '#demo' : '') : null
+      historyKey: project ? project.root + (tourDemo ? '#demo' : '') : null,
+      // a table rename keeps its canvas position and any open grid tab
+      onRenames(renamed) {
+        try {
+          const raw = JSON.parse(localStorage.getItem(canvasPosKey())) || {};
+          let changed = false;
+          for (const [from, to] of Object.entries(renamed)) {
+            if (raw[from] && !raw[to]) { raw[to] = raw[from]; delete raw[from]; changed = true; }
+          }
+          if (changed) localStorage.setItem(canvasPosKey(), JSON.stringify(raw));
+        } catch { /* ignore */ }
+        for (const [from, to] of Object.entries(renamed)) {
+          const gt = tabById('t:' + from);
+          if (gt) {
+            gt.id = 't:' + to;
+            gt.label = '▦ ' + to;
+            if (activeTab === 't:' + from) activeTab = gt.id;
+          }
+        }
+        renderTabs();
+      }
     });
   }
 }
