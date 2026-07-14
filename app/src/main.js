@@ -370,6 +370,15 @@ function renderTabs() {
   add.title = 'new saved query tab';
   add.addEventListener('click', newQueryTab);
   bar.appendChild(add);
+
+  // the active query tab gets its run button right in the bar
+  const at = tabById(activeTab);
+  if (at && at.id && at.id.startsWith('q:')) {
+    const run = el('button', 'ftab run-tab', '▶ run');
+    run.title = 'run this query file against the project database (Ctrl+Enter)';
+    run.addEventListener('click', runEditorSQL);
+    bar.appendChild(run);
+  }
 }
 
 function closeTab(id) {
@@ -817,10 +826,38 @@ async function newQueryTab() {
   activateTab(t.id);
 }
 
+/** Ctrl+Enter / the ▶ button: run the selection — or a query tab whole.
+ *  schema.sql/data.sql never run whole from here (the file starts with
+ *  DROP DATABASE — that's the rebuild path, not a casual keystroke);
+ *  writes are journaled (→ undoable, grids refresh), pure reads are not. */
+async function runEditorSQL() {
+  const t = tabById(activeTab);
+  if (!t || t.kind === 'view') return;
+  if (!engineRunning) { toast('The engine is not running.'); return; }
+  const sel = editor.value.substring(editor.selectionStart, editor.selectionEnd).trim();
+  let text = sel;
+  let label = 'selection in ' + t.label;
+  if (!text) {
+    if (!t.id.startsWith('q:')) {
+      toast('Select the SQL to run. (Whole-file runs are for query tabs — schema.sql applies with Ctrl+S.)');
+      return;
+    }
+    text = t.content;
+    label = t.label;
+  }
+  const stmts = splitSQL(text);
+  if (!stmts.length) { toast('Nothing to run.'); return; }
+  const writes = !stmts.every(s => /^(SELECT|SHOW|DESCRIBE|DESC|EXPLAIN|WITH)\b/i.test(s));
+  await runScript(text, 'run: ' + label, { journal: writes });
+}
+
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault();
     saveActive();
+  } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    runEditorSQL();
   }
 });
 
@@ -1399,6 +1436,7 @@ const SHORTCUTS = [
   ['Everywhere', [
     ['Ctrl+Z / Ctrl+Y', 'undo / redo ANY applied change — schema, data, imports'],
     ['Ctrl+S', 'save the file — on schema.sql this applies your edits to the live database'],
+    ['Ctrl+Enter', 'run the selected SQL — or a query tab whole (▶)'],
     ['?', 'this cheat sheet'],
     ['Esc', 'close any dialog or popover']
   ]],

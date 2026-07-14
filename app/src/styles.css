@@ -369,6 +369,8 @@ body.split-drag { user-select: none; }
 /* ================= view tabs (database, grids) ================= */
 #view-host { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; }
 .ftab.view-tab { font-family: inherit; }
+.ftab.run-tab { color: var(--accent); font-weight: 700; }
+.ftab.run-tab:hover { background: var(--accent); color: #fff; }
 .tab-x { color: var(--muted); font-size: .7rem; padding: 0 2px; }
 .tab-x:hover { color: var(--accent); }
 
