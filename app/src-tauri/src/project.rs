@@ -160,6 +160,12 @@ pub async fn import_read(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// Write to a user-picked path (the native SAVE dialog chose it — exports).
+#[tauri::command]
+pub async fn export_write(path: String, content: String) -> Result<(), String> {
+    fs::write(&path, content).map_err(|e| e.to_string())
+}
+
 /// UI state that belongs to the PROJECT (canvas layout etc.) — lives in
 /// .sqlstudio/ui.json so copying/moving the folder carries it along.
 #[tauri::command]

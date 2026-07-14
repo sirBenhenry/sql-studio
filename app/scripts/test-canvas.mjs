@@ -70,6 +70,22 @@ CREATE TABLE task (
     JSON.stringify(savedOut.__pan));
 }
 
+/* ---- live row counts fill in when loadCounts resolves ---- */
+{
+  const host = document.querySelector('#host');
+  mountCanvasView(host, schema, {
+    openTable: () => {},
+    loadPositions: () => ({}),
+    savePositions: () => {},
+    loadCounts: async () => ({ person: 6, task: 1 })
+  });
+  await new Promise(r => setTimeout(r, 20));
+  const byTable = n => host.querySelector('.cv-count[data-table="' + n + '"]');
+  ck('counts land on the cards', byTable('person').textContent === '6 rows' && byTable('task').textContent === '1 row',
+    byTable('person').textContent + '/' + byTable('task').textContent);
+  ck('missing count stays blank', byTable('category').textContent === '', byTable('category').textContent);
+}
+
 /* ---- saved positions respected; unsaved cards placed below them ---- */
 {
   const host = document.querySelector('#host');

@@ -17,6 +17,7 @@
         <button class="lang-opt" data-lang="natural">Natural</button>
         <button class="lang-opt" data-lang="plain">SQL</button>
       </div>
+      <button id="btn-help" title="Keyboard shortcuts (?)">?</button>
       <button id="btn-settings" title="Settings">⚙</button>
     </div>
   </header>
@@ -53,8 +54,39 @@
       </div>
     </div>
     <div class="set-row2">
+      <span class="set-label">text size (editor & console)</span>
+      <div class="seg" id="set-fontsize">
+        <button data-v="s">Small</button>
+        <button data-v="m">Medium</button>
+        <button data-v="l">Large</button>
+      </div>
+    </div>
+    <div class="set-row2">
       <span class="set-label">max rows shown per result</span>
       <input id="set-rowlimit" class="set-num" type="number" min="10" max="10000" step="10" />
+    </div>
+    <div class="set-row2">
+      <span class="set-label">undo steps kept</span>
+      <input id="set-undodepth" class="set-num" type="number" min="5" max="200" step="5" />
+    </div>
+    <div class="set-row2">
+      <span class="set-label">on start, reopen the last project</span>
+      <div class="seg" id="set-reopen">
+        <button data-v="on">On</button>
+        <button data-v="off">Off</button>
+      </div>
+    </div>
+    <div class="set-row2">
+      <span class="set-label">new foreign keys default to (on delete / on update)</span>
+      <div class="seg" id="set-fkdel">
+        <button data-v="CASCADE">Cascade</button>
+        <button data-v="SET NULL">Set null</button>
+        <button data-v="RESTRICT">Restrict</button>
+      </div>
+      <div class="seg" id="set-fkupd" style="margin-left:6px">
+        <button data-v="CASCADE">Cascade</button>
+        <button data-v="RESTRICT">Restrict</button>
+      </div>
     </div>
     <div class="set-row2">
       <span class="set-label">confirm before deleting rows</span>
@@ -66,6 +98,11 @@
     <div class="set-row2">
       <span class="set-label">bring existing data</span>
       <button class="btn small" id="set-import">import a .sql dump…</button>
+      <button class="btn small" id="set-import-csv">import a .csv as a table…</button>
+    </div>
+    <div class="set-row2">
+      <span class="set-label">share</span>
+      <button class="btn small" id="set-export">export project as one .sql…</button>
     </div>
     <div class="set-row2">
       <span class="set-label">new here?</span>

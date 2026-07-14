@@ -13,6 +13,7 @@ export function mountGrid(host, table, hooks) {
     columns: [],
     limit: (hooks.rowLimit && hooks.rowLimit()) || 500,
     sort: null,     // { col, dir: 'ASC'|'DESC' }
+    filter: '',     // server-side: matches ANY column, works past the limit
     dirty: false
   };
 
@@ -47,9 +48,17 @@ export function mountGrid(host, table, hooks) {
       .join(' AND ');
   }
 
+  function filterWhere() {
+    const q = state.filter.trim();
+    if (!q) return '';
+    const like = "'%" + q.replace(/\\/g, '\\\\\\\\').replace(/([%_])/g, '\\$1').replace(/'/g, "''") + "%'";
+    const conds = state.table.columns.map(c => 'CAST(`' + c.name + '` AS CHAR) LIKE ' + like);
+    return ' WHERE ' + conds.join(' OR ');
+  }
+
   async function load() {
     const order = state.sort ? ' ORDER BY `' + state.sort.col + '` ' + state.sort.dir : '';
-    const res = await hooks.exec('SELECT * FROM `' + state.table.name + '`' + order + ' LIMIT ' + state.limit);
+    const res = await hooks.exec('SELECT * FROM `' + state.table.name + '`' + filterWhere() + order + ' LIMIT ' + state.limit);
     if (!res) {
       // never leave whatever was on screen before — show the failure
       host.textContent = '';
@@ -215,19 +224,53 @@ export function mountGrid(host, table, hooks) {
   }
 
   function render() {
+    // render() rebuilds the DOM — if the user is typing in the filter box,
+    // the fresh input must get the focus (and caret) back
+    const refocusFilter = host.contains(host.ownerDocument.activeElement) &&
+      host.ownerDocument.activeElement.classList.contains('grid-filter');
     host.textContent = '';
 
     const head = el('div', 'grid-head');
     head.appendChild(el('span', 'grid-title', state.table.name));
     head.appendChild(el('span', 'grid-note',
       state.rows.length + ' row' + (state.rows.length === 1 ? '' : 's') +
+      (state.filter.trim() ? ' matching' : '') +
       (state.rows.length >= state.limit ? ' (first ' + state.limit + ')' : '') +
       (editable ? ' · double-click a cell to edit · click a header to sort' : ' · read-only (no primary key)')));
+
+    /* find rows: server-side, so it works past the row limit */
+    const filt = el('input', 'grid-filter');
+    filt.type = 'text';
+    filt.spellcheck = false;
+    filt.placeholder = 'find…';
+    filt.value = state.filter;
+    filt.title = 'show only rows where any column contains this (searches the whole table)';
+    let filtT = null;
+    filt.addEventListener('input', () => {
+      state.filter = filt.value;
+      clearTimeout(filtT);
+      filtT = setTimeout(load, 250);
+    });
+    filt.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && filt.value) { filt.value = ''; state.filter = ''; load(); }
+    });
+    head.appendChild(filt);
+
     if (state.rows.length >= state.limit) {
       const more = el('button', 'btn small', '+ load more');
       more.title = 'show ' + state.limit + ' more rows';
       more.addEventListener('click', () => { state.limit *= 2; load(); });
       head.appendChild(more);
+    }
+    if (hooks.exportCsv && state.rows.length) {
+      const exp = el('button', 'btn small', '⇪ csv');
+      exp.title = 'export this table (respecting the filter) as a .csv file';
+      exp.addEventListener('click', async () => {
+        // the FULL matching table, not just the loaded page
+        const res = await hooks.exec('SELECT * FROM `' + state.table.name + '`' + filterWhere());
+        if (res) hooks.exportCsv(state.table.name, res.columns, res.rows);
+      });
+      head.appendChild(exp);
     }
     const reload = el('button', 'btn small', '↻');
     reload.title = 'reload';
@@ -308,6 +351,10 @@ export function mountGrid(host, table, hooks) {
     scroll.appendChild(table);
     host.appendChild(scroll);
     host.appendChild(sug); // render() clears the host — keep the dropdown alive
+    if (refocusFilter) {
+      const f = host.querySelector('.grid-filter');
+      if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+    }
   }
 
   load();

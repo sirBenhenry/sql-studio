@@ -148,6 +148,9 @@ export function mountCanvasView(host, schema, hooks) {
     card.style.top = pos[t.name].y + 'px';
     const head = el('div', 'cv-head');
     head.appendChild(el('span', 'cv-name', t.name));
+    const count = el('span', 'cv-count', '');
+    count.dataset.table = t.name;
+    head.appendChild(count);
     const open = el('button', 'iconbtn', '▦');
     open.title = 'open data';
     open.addEventListener('click', e => { e.stopPropagation(); hooks.openTable(t.name); });
@@ -243,4 +246,14 @@ export function mountCanvasView(host, schema, hooks) {
 
   sizeStage();
   drawLines();
+
+  /* live row counts, filled in as they arrive (cards render immediately) */
+  if (hooks.loadCounts) {
+    hooks.loadCounts(tables.map(t => t.name)).then(counts => {
+      for (const [name, n] of Object.entries(counts || {})) {
+        const e = stage.querySelector('.cv-count[data-table="' + name + '"]');
+        if (e) e.textContent = n + (n === 1 ? ' row' : ' rows');
+      }
+    }).catch(() => { /* engine offline — cards stay countless */ });
+  }
 }

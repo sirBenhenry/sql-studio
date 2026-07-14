@@ -886,21 +886,22 @@ export function mountTablesDesigner(host, schema, hooks) {
       /* --- foreign key row --- */
       const fkRow = el('div', 'dz-fkrow');
       fkRow.appendChild(el('span', 'dz-fklabel', 'references →'));
-      const cascSel = () => {
+      const cascSel = which => {
         const s = el('select');
         for (const [v, label] of [['', '(default)'], ['CASCADE', 'CASCADE'], ['SET NULL', 'SET NULL'], ['RESTRICT', 'RESTRICT']]) {
           const o = el('option', null, label);
           o.value = v;
           s.appendChild(o);
         }
-        s.value = 'CASCADE';
+        // the host's configured default for new FKs (Settings)
+        s.value = (hooks.fkDefaults && hooks.fkDefaults()[which]) || 'CASCADE';
         return s;
       };
       if (existingFk) {
         fkRow.appendChild(el('span', 'dz-fkinfo', existingFk.refTable + '.' + existingFk.refCol));
         // the rules stay editable — changing one re-creates the constraint
         const mkCasc = key => {
-          const s = cascSel();
+          const s = cascSel(key);
           s.value = existingFk[key] || '';
           s.addEventListener('change', () => {
             existingFk[key] = s.value || null;
@@ -936,8 +937,8 @@ export function mountTablesDesigner(host, schema, hooks) {
             refSel.appendChild(o);
           }
         }
-        const onUpd = cascSel();
-        const onDel = cascSel();
+        const onUpd = cascSel('onUpdate');
+        const onDel = cascSel('onDelete');
         refSel.addEventListener('change', () => {
           if (!refSel.value) return;
           const [rt, rc] = refSel.value.split('|');

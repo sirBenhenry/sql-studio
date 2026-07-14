@@ -8,6 +8,7 @@ import { mountGrid } from './grid.js';
 import { mountTablesDesigner, createTableDDL, modelFromSchema, diffModels, resolveFixups } from './tables-designer.js';
 import { mountCanvasView } from './canvas-view.js';
 import { runTour, pressPulse } from './tour.js';
+import { parseCSV, inferCsvTable, toCSV } from './csv.js';
 
 const { invoke } = window.__TAURI__.core;
 const { open: openDialog } = window.__TAURI__.dialog;
@@ -84,7 +85,14 @@ let activeTab = null;
 
 /* ================= settings ================= */
 
-const DEFAULT_SETTINGS = { theme: 'system', lang: 'natural', rowLimit: 500, confirmDelete: true };
+const DEFAULT_SETTINGS = {
+  theme: 'system', lang: 'natural', rowLimit: 500, confirmDelete: true,
+  fontSize: 'm',          // editor + console: s | m | l
+  reopenLast: false,      // jump straight back into the last project
+  fkOnDelete: 'CASCADE',  // designer default for new foreign keys
+  fkOnUpdate: 'CASCADE',
+  undoDepth: 60           // global undo steps kept
+};
 
 function loadSettings() {
   try { return { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem('sqlstudio.settings')) || {}) }; }
@@ -101,6 +109,10 @@ function applyTheme() {
   if (SETTINGS.theme === 'system') root.removeAttribute('data-theme');
   else root.setAttribute('data-theme', SETTINGS.theme);
   if (builder && builder.setTheme) builder.setTheme(SETTINGS.theme);
+}
+
+function applyFontSize() {
+  document.documentElement.setAttribute('data-fontsize', SETTINGS.fontSize || 'm');
 }
 
 function wireSettingsUI() {
@@ -130,6 +142,17 @@ function wireSettingsUI() {
     if (LANG !== v) { LANG = v; applyLang(); if (builder) builder.setLang(v); }
   });
   seg('#set-confirm', () => (SETTINGS.confirmDelete ? 'on' : 'off'), v => { SETTINGS.confirmDelete = v === 'on'; });
+  seg('#set-fontsize', () => SETTINGS.fontSize, v => { SETTINGS.fontSize = v; applyFontSize(); });
+  seg('#set-reopen', () => (SETTINGS.reopenLast ? 'on' : 'off'), v => { SETTINGS.reopenLast = v === 'on'; });
+  seg('#set-fkdel', () => SETTINGS.fkOnDelete, v => { SETTINGS.fkOnDelete = v; });
+  seg('#set-fkupd', () => SETTINGS.fkOnUpdate, v => { SETTINGS.fkOnUpdate = v; });
+
+  $('#set-undodepth').addEventListener('change', e => {
+    const n = parseInt(e.target.value, 10);
+    SETTINGS.undoDepth = Number.isFinite(n) ? Math.min(Math.max(n, 5), 200) : DEFAULT_SETTINGS.undoDepth;
+    saveSettings();
+    syncSettingsUI();
+  });
 
   $('#set-tour').addEventListener('click', () => {
     openClose(false);
@@ -141,6 +164,14 @@ function wireSettingsUI() {
     openClose(false);
     await importDump();
   });
+  $('#set-import-csv').addEventListener('click', async () => {
+    openClose(false);
+    await importCsv();
+  });
+  $('#set-export').addEventListener('click', async () => {
+    openClose(false);
+    await exportProjectDump();
+  });
 
   $('#set-rowlimit').addEventListener('change', e => {
     const n = parseInt(e.target.value, 10);
@@ -151,11 +182,12 @@ function wireSettingsUI() {
 }
 
 function syncSettingsUI() {
-  for (const sel of ['#set-theme', '#set-lang', '#set-confirm']) {
+  for (const sel of ['#set-theme', '#set-lang', '#set-confirm', '#set-fontsize', '#set-reopen', '#set-fkdel', '#set-fkupd']) {
     const box = $(sel);
     if (box && box._sync) box._sync();
   }
   $('#set-rowlimit').value = SETTINGS.rowLimit;
+  $('#set-undodepth').value = SETTINGS.undoDepth;
 }
 
 /* ================= language toggle (persisted) ================= */
@@ -608,6 +640,18 @@ function renderDbTab(host) {
       savePositions(pos) {
         uiState.canvas = pos;
         saveUiState();
+      },
+      // live row counts, filled in as they arrive
+      async loadCounts(names) {
+        const counts = {};
+        if (!engineRunning || !currentDb) return counts;
+        for (const n of names) {
+          try {
+            const r = await invoke('db_exec', { sql: 'SELECT COUNT(*) FROM `' + n + '`', db: currentDb });
+            counts[n] = r.rows[0] ? Number(r.rows[0][0]) : 0;
+          } catch { /* table not in the db (yet) — no count shown */ }
+        }
+        return counts;
       }
     });
   } else {
@@ -622,6 +666,7 @@ function renderDbTab(host) {
       confirm: msg => appConfirm(msg, { title: 'This deletes things', ok: 'Do it' }),
       globalUndo,
       globalRedo,
+      fkDefaults: () => ({ onDelete: SETTINGS.fkOnDelete, onUpdate: SETTINGS.fkOnUpdate }),
       // undo survives View↔Edit flips; the tour demo gets its own lane
       historyKey: project ? project.root + (tourDemo ? '#demo' : '') : null,
       // a table rename keeps its canvas position and any open grid tab
@@ -669,7 +714,19 @@ async function renderViewTab(t, host) {
       shouldConfirm: () => SETTINGS.confirmDelete,
       confirmDialog: msg => appConfirm(msg, { title: 'Delete row?', ok: 'Delete' }),
       rowLimit: () => SETTINGS.rowLimit,
-      lookupFkRows: fkRowSearch
+      lookupFkRows: fkRowSearch,
+      async exportCsv(name, columns, rows) {
+        const path = await window.__TAURI__.dialog.save({
+          title: 'Export ' + name + ' as CSV',
+          defaultPath: name + '.csv',
+          filters: [{ name: 'CSV', extensions: ['csv'] }]
+        });
+        if (!path) return;
+        try {
+          await invoke('export_write', { path, content: toCSV(columns, rows) });
+          toast(rows.length + ' rows exported');
+        } catch (e) { toast(String(e)); }
+      }
     });
   }
 }
@@ -909,7 +966,7 @@ function settleState() {
 function pushUndo(label) {
   if (restoring || tourDemo || !lastSettled) return;
   undoStack.push({ ...lastSettled, label });
-  if (undoStack.length > 60) undoStack.shift();
+  while (undoStack.length > (SETTINGS.undoDepth || 60)) undoStack.shift();
   redoStack.length = 0; // a fresh change forks history
 }
 
@@ -1229,9 +1286,24 @@ function logResult(res) {
     }
     table.appendChild(tbody);
     wrap.appendChild(table);
+    const noteRow = el('div', 'log-note');
     let note = res.rows.length + ' row' + (res.rows.length === 1 ? '' : 's') + ' · ' + res.elapsed_ms + ' ms';
     if (res.rows.length > MAX) note += ' (showing first ' + MAX + ')';
-    wrap.appendChild(el('div', 'log-note', note));
+    noteRow.appendChild(document.createTextNode(note + '  '));
+    const copyBtn = el('button', 'log-copy', '⧉ copy csv');
+    copyBtn.title = 'copy ALL result rows as CSV (paste into Excel)';
+    copyBtn.addEventListener('click', () => {
+      const ta = el('textarea');
+      ta.value = toCSV(res.columns, res.rows);
+      ta.style.cssText = 'position:fixed;left:-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); toast(res.rows.length + ' rows copied as CSV'); }
+      catch { toast('copy failed'); }
+      ta.remove();
+    });
+    noteRow.appendChild(copyBtn);
+    wrap.appendChild(noteRow);
     $('#console-log').appendChild(wrap);
     trimConsole();
     wrap.scrollIntoView({ block: 'end' });
@@ -1319,6 +1391,139 @@ async function importDump() {
   if (activeTab === 'db') { const v = $('#view-host'); if (v) renderDbTab(v); }
   if (ok) { logOk('import complete — files regenerated from the database'); toast(fname + ' imported'); }
   else logErr('import stopped at the first failing statement — files re-synced to what actually applied');
+}
+
+/* ================= shortcuts overlay ================= */
+
+const SHORTCUTS = [
+  ['Everywhere', [
+    ['Ctrl+Z / Ctrl+Y', 'undo / redo ANY applied change — schema, data, imports'],
+    ['Ctrl+S', 'save the file — on schema.sql this applies your edits to the live database'],
+    ['?', 'this cheat sheet'],
+    ['Esc', 'close any dialog or popover']
+  ]],
+  ['Console', [
+    ['Enter', 'run the SQL (not journaled — scratch space)'],
+    ['Shift+Enter', 'new line'],
+    ['↑ / ↓', 'walk your command history']
+  ]],
+  ['Table grids (▦)', [
+    ['double-click a cell', 'edit — clicking away commits, Esc cancels'],
+    ['type in an FK column', 'search the referenced table; ↓/↑ + Enter picks'],
+    ['click a column header', 'sort (asc → desc → natural)'],
+    ["type '' in a cell", 'an actual empty string (blank = NULL)'],
+    ['find…', 'show only matching rows — searches the whole table']
+  ]],
+  ['⊞ database', [
+    ['click away from an edit', 'applies it (the designer\'s semi-live rule)'],
+    ['click a black property tag', 'removes that property'],
+    ['drag the background / wheel', 'pan the diagram'],
+    ['ctrl+wheel', 'zoom (on the cursor)']
+  ]],
+  ['Builder', [
+    ['▶ Run / ✓ Apply', 'execute — writes land in your files + journal'],
+    ['+ add row (INSERT)', 'applies the built row, then starts the next'],
+    ['+ to file (SELECT)', 'keep the query in queries/']
+  ]]
+];
+
+function showShortcuts() {
+  if (document.querySelector('.cfm-modal')) return;
+  const back = el('div', 'cfm-backdrop');
+  const box = el('div', 'cfm-modal keys-modal');
+  box.appendChild(el('h3', null, 'Keyboard & mouse'));
+  for (const [group, rows] of SHORTCUTS) {
+    box.appendChild(el('div', 'keys-group', group));
+    for (const [k, what] of rows) {
+      const r = el('div', 'keys-row');
+      r.appendChild(el('kbd', null, k));
+      r.appendChild(el('span', null, what));
+      box.appendChild(r);
+    }
+  }
+  const row = el('div', 'cfm-actions');
+  const okBtn = el('button', 'btn small primary', 'Got it');
+  row.appendChild(okBtn);
+  box.appendChild(row);
+  document.body.appendChild(back);
+  document.body.appendChild(box);
+  const done = () => {
+    back.remove();
+    box.remove();
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onKey = e => {
+    if (e.key === 'Escape' || e.key === 'Enter' || e.key === '?') { e.preventDefault(); e.stopPropagation(); done(); }
+  };
+  document.addEventListener('keydown', onKey, true);
+  okBtn.addEventListener('click', done);
+  back.addEventListener('click', done);
+  okBtn.focus();
+}
+
+$('#btn-help').addEventListener('click', showShortcuts);
+document.addEventListener('keydown', e => {
+  if (e.key !== '?') return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  e.preventDefault();
+  showShortcuts();
+});
+
+/* ================= CSV import / exports ================= */
+
+/** Settings → import a .csv: parse, infer a table (types + PK), confirm,
+ *  CREATE + chunked INSERTs — journaled, so it's ONE Ctrl+Z step. */
+async function importCsv() {
+  if (!project) { toast('Open a project first.'); return; }
+  if (!engineRunning || !currentDb) { toast('The engine is not running.'); return; }
+  if (tourDemo) { toast('Finish the tour first.'); return; }
+  const path = await openDialog({
+    title: 'Pick a .csv to import as a table',
+    filters: [{ name: 'CSV', extensions: ['csv', 'txt'] }]
+  });
+  if (!path) return;
+  let text;
+  try { text = await invoke('import_read', { path }); }
+  catch (e) { toast(String(e)); return; }
+  const rows = parseCSV(text);
+  const fname = String(path).split(/[\\/]/).pop().replace(/\.(csv|txt)$/i, '');
+  const name = await appPrompt('Name the new table (first CSV row = column names)', fname);
+  if (name == null) return;
+  const t = inferCsvTable(name, rows);
+  if (!t) { toast('That file needs a header row and at least one data row.'); return; }
+  if (schemaModel().byName[t.name]) { toast('A table named ' + t.name + ' already exists.'); return; }
+  const colList = t.columns.join(', ');
+  if (!(await appConfirm(
+    t.rowCount + ' rows → new table `' + t.name + '`\ncolumns: ' + colList + '\n\n' + t.ddl,
+    { title: 'Import ' + fname + '.csv?', ok: 'Import' }))) return;
+  const ok = await runScriptFast([t.ddl].concat(t.inserts).join('\n'), 'import csv: ' + t.name, { journal: true });
+  if (ok) {
+    await syncSchemaFromDb();
+    if (activeTab === 'db') { const v = $('#view-host'); if (v) renderDbTab(v); }
+    openTableGrid(t.name);
+    toast(t.name + ' imported — ' + t.rowCount + ' rows');
+  }
+}
+
+/** Settings → export the whole project as one runnable .sql */
+async function exportProjectDump() {
+  if (!project) { toast('Open a project first.'); return; }
+  const s = tabById('schema');
+  const d = tabById('data');
+  const path = await window.__TAURI__.dialog.save({
+    title: 'Export the project as one .sql file',
+    defaultPath: project.name + '.sql',
+    filters: [{ name: 'SQL', extensions: ['sql'] }]
+  });
+  if (!path) return;
+  const text = '-- ' + project.name + ' — exported by SQL Studio ' +
+    new Date().toISOString().slice(0, 10) + '\n-- run against any MySQL 8+ server\n\n' +
+    (s ? s.content : '') + '\n\n' + (d ? d.content : '') + '\n';
+  try {
+    await invoke('export_write', { path, content: text });
+    toast('exported to ' + String(path).split(/[\\/]/).pop());
+  } catch (e) { toast(String(e)); }
 }
 
 /* ================= onboarding tour ================= */
@@ -1737,3 +1942,10 @@ try {
 renderRecents();
 wireSettingsUI();
 applyTheme();
+applyFontSize();
+
+// straight back to work: reopen the last project when the setting says so
+if (SETTINGS.reopenLast) {
+  const rec = getRecents();
+  if (rec.length) openProjectAt(rec[0].root);
+}

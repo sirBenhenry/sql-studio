@@ -179,6 +179,30 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
 34. **Engine download URL verified alive** (200 via cdn.mysql.com — no rot;
     checked, no change needed).
 
+## Consumer round (Ben present, buckets confirmed via question)
+
+35. **CSV import** — Settings → "import a .csv as a table…": RFC-4180 parser,
+    type inference (INT/DECIMAL/DATE/DATETIME/VARCHAR/TEXT), unique-int first
+    column becomes the PK (else synthetic auto-id so the grid stays
+    editable), header sanitize/dedupe, chunked INSERTs, journaled = ONE
+    Ctrl+Z step, grid opens on finish. Pure module `csv.js` + 15-test
+    `test-csv.mjs`.
+36. **CSV out** — every grid gets "⇪ csv" (full matching table via save
+    dialog, not just the loaded page; respects the filter); every console
+    result gets "⧉ copy csv" (all rows, Excel-pasteable). New `export_write`
+    Rust command.
+37. **Grid find box** — server-side contains-filter across ALL columns
+    (works past the row limit), debounced, Escape clears, focus survives the
+    reload-render, export respects it.
+38. **Canvas row counts** — live COUNT(*) per card, filled in async.
+39. **Share as one .sql** — Settings → "export project as one .sql…"
+    (schema + data concatenated, dated header, save dialog).
+40. **? shortcuts overlay** — topbar ? button or the ? key: one-screen cheat
+    sheet (global undo, console, grids, designer, builder).
+41. **Settings expansion** — text size S/M/L (editor+console via
+    --code-size), reopen-last-project on start, default FK rules for new
+    foreign keys (designer reads them), undo-depth (global undo honors it).
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much

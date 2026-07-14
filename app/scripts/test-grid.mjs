@@ -209,6 +209,42 @@ ck('DELETE addressed by PK', del === 'DELETE FROM `item` WHERE `id` = 1 LIMIT 1'
   ck("typed '' updates to an empty string", execd.some(s => s.includes("SET `name` = ''")), execd.join(' | '));
 }
 
+// --- the find box: server-side filter across all columns, focus survives ---
+{
+  const execd = [];
+  const hostF = document.createElement('div');
+  document.body.appendChild(hostF);
+  mountGrid(hostF, {
+    name: 'flt',
+    columns: [{ name: 'id', pk: true, numeric: true }, { name: 'name' }],
+    fks: []
+  }, {
+    exec: async sql => { execd.push(sql); return { columns: ['id', 'name'], rows: [['1', 'Anna']], affected: 0, elapsed_ms: 0 }; },
+    journal: () => {},
+    exportCsv: () => {}
+  });
+  await tick(); await tick();
+  const fin = hostF.querySelector('.grid-filter');
+  ck('find box present', !!fin);
+  fin.focus();
+  fin.value = "an'na";
+  fin.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(300); await tick();
+  const q = execd[execd.length - 1];
+  ck('filter queries every column server-side',
+    q.includes("CAST(`id` AS CHAR) LIKE '%an''na%'") && q.includes('OR CAST(`name` AS CHAR)'), q);
+  ck('focus survives the reload-render',
+    document.activeElement && document.activeElement.classList.contains('grid-filter'));
+
+  // csv export pulls the FULL matching set (no LIMIT)
+  execd.length = 0;
+  const expBtn = [...hostF.querySelectorAll('button')].find(b => b.textContent === '⇪ csv');
+  ck('csv export offered', !!expBtn);
+  expBtn.click();
+  await tick(); await tick();
+  ck('export re-queries without LIMIT', execd.some(s => s.includes('WHERE') && !s.includes('LIMIT')), JSON.stringify(execd));
+}
+
 // --- a failing first load must show an error, not keep the old view ---
 {
   const hostErr = document.createElement('div');

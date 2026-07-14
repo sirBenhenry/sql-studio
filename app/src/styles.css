@@ -278,7 +278,7 @@ body.split-drag { user-select: none; }
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   margin: 0; border: 0;
-  font-family: var(--mono); font-size: .86rem; line-height: 1.6;
+  font-family: var(--mono); font-size: var(--code-size, .86rem); line-height: 1.6;
   padding: 12px 14px;
   tab-size: 2;
   white-space: pre-wrap;
@@ -318,12 +318,18 @@ body.split-drag { user-select: none; }
   flex: 1; min-height: 0;
   overflow-y: auto; overflow-x: hidden;   /* never scroll sideways */
   padding: 8px 12px;
-  font-family: var(--mono); font-size: .8rem;
+  font-family: var(--mono); font-size: var(--code-size, .8rem);
   user-select: text;
 }
 .log-stmt { color: var(--muted); white-space: pre-wrap; margin: 8px 0 2px; }
 .log-ok { color: #16a34a; }
 .log-err { color: var(--accent); white-space: pre-wrap; }
+.log-copy {
+  background: none; border: 1px solid var(--line); color: var(--muted);
+  font-family: inherit; font-size: .62rem; padding: 1px 7px; cursor: pointer;
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.log-copy:hover { color: var(--ink); border-color: var(--ink); }
 .log-hint {
   color: var(--ink); white-space: pre-wrap;
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: .78rem;
@@ -352,7 +358,7 @@ body.split-drag { user-select: none; }
 #console-input {
   width: 100%; border: 0; outline: none;
   background: var(--bg); color: var(--ink);
-  font-family: var(--mono); font-size: .82rem;
+  font-family: var(--mono); font-size: var(--code-size, .82rem);
   padding: 8px 12px;
   user-select: text;
   resize: none; overflow-y: auto; overflow-x: hidden;
@@ -412,6 +418,10 @@ body.split-drag { user-select: none; }
   font-weight: 800; font-size: .72rem;
   text-transform: uppercase; letter-spacing: .06em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cv-count {
+  margin-left: auto; padding-right: 4px; flex: 0 0 auto;
+  color: var(--muted); font-family: var(--mono); font-size: .58rem; white-space: nowrap;
 }
 .cv-row {
   display: flex; justify-content: space-between; align-items: center; gap: 8px;
@@ -541,6 +551,11 @@ body.split-drag { user-select: none; }
 }
 .grid-title { font-weight: 800; font-size: .9rem; text-transform: uppercase; letter-spacing: .06em; }
 .grid-note { color: var(--muted); font-size: .74rem; flex: 1; }
+.grid-filter {
+  width: 150px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: var(--mono); font-size: .74rem; padding: 4px 8px; outline: none;
+}
+.grid-filter:focus { border-color: var(--accent); }
 .grid-scroll { overflow-y: auto; overflow-x: hidden; padding: 12px 14px; }
 .grid-scroll .result-table { width: 100%; table-layout: auto; }
 .grid-table td { user-select: text; }
@@ -670,6 +685,32 @@ body.split-drag { user-select: none; }
 .cfm-input { width: 100%; margin-bottom: 14px; }
 .cfm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .cfm-danger { background: var(--accent) !important; border-color: var(--accent) !important; }
+
+/* text-size setting: editor, console and grids scale together */
+:root[data-fontsize="s"] { --code-size: .72rem; }
+:root[data-fontsize="m"] { --code-size: .84rem; }
+:root[data-fontsize="l"] { --code-size: 1rem; }
+
+/* the ? shortcuts overlay */
+#btn-help {
+  background: none; border: 1px solid var(--line); color: var(--muted);
+  cursor: pointer; font-size: .8rem; font-weight: 700;
+  width: 26px; height: 26px; border-radius: 50%; padding: 0;
+}
+#btn-help:hover { color: var(--accent); border-color: var(--accent); }
+.keys-modal { width: min(560px, calc(100vw - 32px)); max-height: 80vh; overflow-y: auto; }
+.keys-group {
+  font-size: .62rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); margin: 12px 0 6px;
+}
+.keys-row { display: flex; align-items: baseline; gap: 12px; padding: 2.5px 0; font-size: .8rem; }
+.keys-row kbd {
+  flex: 0 0 170px; font-family: var(--mono); font-size: .7rem;
+  color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent);
+  padding: 1px 6px; border: 1px solid var(--line); border-radius: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.keys-row span { color: var(--muted); }
 
 /* ================= toast ================= */
 #toast {
