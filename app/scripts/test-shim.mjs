@@ -271,5 +271,46 @@ d.querySelector('#tab-insert').click();
   void delSel;
 }
 
+// ---- Ben's 1140: plain column + aggregate must auto-complete the GROUP BY
+// (and a per-group condition must never be silently dropped) ----
+{
+  d.body.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true })); // close any popover
+  await tick(20);
+  d.querySelector('#tab-select').click();
+  await tick(20);
+  // fresh query on the café schema
+  d.querySelector('#schema-input').value =
+    'CREATE DATABASE cafe;\nUSE cafe;\n' +
+    'CREATE TABLE game (id INT UNSIGNED NOT NULL AUTO_INCREMENT, title VARCHAR(60) NOT NULL, PRIMARY KEY(id));\n' +
+    'CREATE TABLE session2 (id INT UNSIGNED NOT NULL AUTO_INCREMENT, game_id INT UNSIGNED NOT NULL, players INT NOT NULL,\n' +
+    ' PRIMARY KEY(id), FOREIGN KEY(game_id) REFERENCES game(id));';
+  d.querySelector('#btn-parse').click();
+  await tick(20);
+  // FROM session2
+  [...d.querySelectorAll('.bank-btn')][0].click();
+  [...d.querySelectorAll('.popover .chip')].find(c => c.textContent === 'session2').click();
+  await tick(20);
+  // columns → follow game_id → title (adds the join)
+  [...d.querySelectorAll('.bank-btn')].find(b => b.textContent.includes('+ show')).click();
+  let pop = d.querySelector('.popover');
+  const followLab = [...pop.querySelectorAll('label')].find(l => l.textContent.includes('behind game_id'));
+  ck('follow section labeled in plain words', !!followLab, [...pop.querySelectorAll('label')].map(l => l.textContent).join('|'));
+  [...followLab.nextElementSibling.querySelectorAll('.chip')].find(c => c.textContent === 'title').click();
+  await tick(20);
+  // + the aggregate: COUNT of players
+  pop = d.querySelector('.popover');
+  [...pop.querySelectorAll('.chip')].find(c => c.textContent.includes('+ count / total / average')).click();
+  await tick(20);
+  pop = d.querySelector('.popover');
+  const colSel = [...pop.querySelectorAll('select')][1];
+  colSel.value = 'session2|players';
+  colSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  [...pop.querySelectorAll('button')].find(b => b.textContent === 'Add').click();
+  await tick(20);
+  const sqlNow = d.querySelector('#sql-output').textContent.replace(/\s+/g, ' ');
+  ck('plain column + aggregate auto-completes GROUP BY (no 1140)',
+    /GROUP BY game\.title/.test(sqlNow), sqlNow);
+}
+
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');
 process.exit(fail ? 1 : 0);

@@ -163,6 +163,9 @@ export function explainError(msg) {
       return 'No database is selected. Put USE <name> (or a CREATE DATABASE header) at the top of the script — or open a project whose database is already named.';
     case '1054':
       return 'No such column. Check the spelling — the schema may have changed since the query was written.';
+    case '1140':
+    case '1055':
+      return 'The query mixes plain columns with calculations (COUNT/SUM/AVG…) but doesn\'t say what to calculate them FOR EACH of. Add a "for each" grouping on the plain columns — in the builder the grouping is added automatically.';
     case '1075':
       return 'AUTO_INCREMENT only works on a key column. Make the column the PRIMARY KEY (or drop AUTO_INCREMENT).';
     case '3730':

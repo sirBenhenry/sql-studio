@@ -2742,7 +2742,17 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
     });
 
     Q.groupBy = Q.groupBy.filter(g => okCol(g.table, g.col));
-    if (!Q.groupBy.length) Q.having = [];
+    // mixing plain columns with calculations (or keeping a per-group
+    // condition) REQUIRES grouping — complete the query with the only valid
+    // meaning (group by the plain selected columns) instead of erroring at
+    // the database or, worse, silently dropping the user's condition.
+    if (!Q.groupBy.length) {
+      const aggish = Q.select.some(s => s.kind === 'agg') || Q.having.length > 0;
+      const plain = Q.select.filter(s => s.kind === 'col');
+      if (aggish && plain.length) {
+        for (const s of plain) Q.groupBy.push({ table: s.table, col: s.col });
+      }
+    }
     Q.having = Q.having.filter(h => {
       if (h.col && !okCol(h.col.table, h.col.col)) return false;
       if (h.src === 'sub' && (!h.sub || !schema.byName[h.sub.table] || !colInfo(h.sub.table, h.sub.col))) return false;
