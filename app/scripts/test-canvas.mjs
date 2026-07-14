@@ -15,7 +15,7 @@ vm.createContext(sb);
 vm.runInContext(readFileSync(join(here, '..', 'src', 'core', 'parser.js'), 'utf8'), sb);
 const parseSchema = sb.window.parseSchema;
 
-const { mountCanvasView } = await import('../src/canvas-view.js');
+const { mountCanvasView, buildDiagramSvg } = await import('../src/canvas-view.js');
 
 let fail = 0;
 const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
@@ -103,6 +103,25 @@ CREATE TABLE task (
     parseInt(cardOf('category').style.top, 10) >= personBottom, cardOf('category').style.top);
   ck('saved pan restored', host.querySelector('.cv-stage').style.transform === 'translate(5px,6px) scale(1)',
     host.querySelector('.cv-stage').style.transform);
+}
+
+/* ---- the diagram exports as standalone SVG (current arrangement) ---- */
+{
+  const host = document.querySelector('#host');
+  const cv = mountCanvasView(host, schema, {
+    openTable: () => {},
+    loadPositions: () => ({ person: { x: 40, y: 60 } }),
+    savePositions: () => {}
+  });
+  ck('mount returns the export api', cv && typeof cv.svg === 'function');
+  const svg = cv.svg();
+  ck('svg has all three cards', ['PERSON', 'CATEGORY', 'TASK'].every(n => svg.includes('>' + n + '<')), svg.slice(0, 200));
+  ck('svg has both FK lines + dots', (svg.match(/<path /g) || []).length === 2 && (svg.match(/<circle /g) || []).length === 2);
+  ck('svg marks PK and FK columns', svg.includes('>PK<') && svg.includes('>FK<'));
+  ck('svg is standalone (white bg, xmlns, sane viewBox)',
+    svg.startsWith('<svg xmlns=') && svg.includes('fill="#ffffff"') && /viewBox="0 0 \d+/.test(svg));
+  ck('empty schema yields an empty svg without crashing',
+    buildDiagramSvg([], {}).includes('<svg'));
 }
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS');

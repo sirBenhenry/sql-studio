@@ -166,6 +166,41 @@ pub async fn export_write(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// dependency-free base64 → bytes (binary exports: .xlsx)
+fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut rev = [255u8; 256];
+    for (i, &c) in ABC.iter().enumerate() {
+        rev[c as usize] = i as u8;
+    }
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let mut buf: u32 = 0;
+    let mut bits: u8 = 0;
+    for b in s.bytes() {
+        if b == b'=' || b == b'\r' || b == b'\n' {
+            continue;
+        }
+        let v = rev[b as usize];
+        if v == 255 {
+            return Err("invalid base64".into());
+        }
+        buf = (buf << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// Binary sibling of export_write — content arrives base64-encoded.
+#[tauri::command]
+pub async fn export_write_b64(path: String, b64: String) -> Result<(), String> {
+    let bytes = b64_decode(&b64)?;
+    fs::write(&path, bytes).map_err(|e| e.to_string())
+}
+
 /// UI state that belongs to the PROJECT (canvas layout etc.) — lives in
 /// .sqlstudio/ui.json so copying/moving the folder carries it along.
 #[tauri::command]
@@ -222,6 +257,15 @@ pub async fn journal_append(state: tauri::State<'_, ProjectState>, entry: String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn b64_decoder_matches_known_vectors() {
+        assert_eq!(b64_decode("TWFu").unwrap(), b"Man");
+        assert_eq!(b64_decode("TWE=").unwrap(), b"Ma");
+        assert_eq!(b64_decode("TQ==").unwrap(), b"M");
+        assert_eq!(b64_decode("UEsDBA==").unwrap(), &[0x50, 0x4b, 0x03, 0x04]); // zip magic
+        assert!(b64_decode("не base64").is_err());
+    }
 
     #[test]
     fn write_atomic_replaces_and_leaves_no_debris() {

@@ -48,6 +48,80 @@ function cardHeight(t) {
   return HEAD_H + t.columns.length * ROW_H + 8;
 }
 
+/** The diagram as a standalone .svg — exactly the current arrangement,
+ *  drawn on white so it drops into docs/slides regardless of app theme. */
+export function buildDiagramSvg(tables, pos) {
+  const INK = '#111111', MUTED = '#737373', LINE = '#e2e2e2', ACCENT = '#e8342c';
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+  for (const t of tables) {
+    const p = pos[t.name];
+    if (!p) continue;
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x + CARD_W);
+    maxY = Math.max(maxY, p.y + cardHeight(t));
+  }
+  if (!isFinite(minX)) return '<svg xmlns="http://www.w3.org/2000/svg"/>';
+  const ox = PAD - minX, oy = PAD - minY;
+  const W = maxX - minX + PAD * 2, H = maxY - minY + PAD * 2;
+  const out = [];
+  out.push('<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H +
+    '" viewBox="0 0 ' + W + ' ' + H + '" font-family="Helvetica, Arial, sans-serif">');
+  out.push('<rect width="' + W + '" height="' + H + '" fill="#ffffff"/>');
+
+  /* lines first (under the cards) — same geometry the live view uses */
+  for (const t of tables) {
+    for (const fk of t.fks) {
+      const from = pos[t.name], to = pos[fk.refTable];
+      if (!from || !to) continue;
+      const idx = t.columns.findIndex(c => c.name === fk.col);
+      const y1 = from.y + oy + (idx >= 0 ? HEAD_H + idx * ROW_H + ROW_H / 2 : HEAD_H / 2);
+      const y2 = to.y + oy + HEAD_H / 2;
+      const fromRight = to.x >= from.x + CARD_W / 2;
+      const x1 = (fromRight ? from.x + CARD_W : from.x) + ox;
+      const x2 = (fromRight ? to.x : to.x + CARD_W) + ox;
+      const pull = Math.max(36, Math.abs(x2 - x1) / 2);
+      const c1 = fromRight ? x1 + pull : x1 - pull;
+      const c2 = fromRight ? x2 - pull : x2 + pull;
+      out.push('<path d="M ' + x1 + ' ' + y1 + ' C ' + c1 + ' ' + y1 + ', ' + c2 + ' ' + y2 + ', ' + x2 + ' ' + y2 +
+        '" fill="none" stroke="' + ACCENT + '" stroke-width="1.5"/>');
+      out.push('<circle cx="' + x2 + '" cy="' + y2 + '" r="3.5" fill="' + ACCENT + '"/>');
+    }
+  }
+
+  for (const t of tables) {
+    const p = pos[t.name];
+    if (!p) continue;
+    const x = p.x + ox, y = p.y + oy, h = cardHeight(t);
+    out.push('<rect x="' + x + '" y="' + y + '" width="' + CARD_W + '" height="' + h +
+      '" fill="#ffffff" stroke="' + LINE + '"/>');
+    out.push('<line x1="' + x + '" y1="' + (y + 2) + '" x2="' + (x + CARD_W) + '" y2="' + (y + 2) +
+      '" stroke="' + INK + '" stroke-width="3"/>');
+    out.push('<line x1="' + x + '" y1="' + (y + HEAD_H) + '" x2="' + (x + CARD_W) + '" y2="' + (y + HEAD_H) +
+      '" stroke="' + LINE + '"/>');
+    out.push('<text x="' + (x + 10) + '" y="' + (y + 20) + '" font-size="11" font-weight="800" ' +
+      'letter-spacing="0.6" fill="' + INK + '">' + esc(t.name.toUpperCase()) + '</text>');
+    t.columns.forEach((c, i) => {
+      const cy = y + HEAD_H + i * ROW_H + ROW_H / 2 + 3.5;
+      let cx = x + 10;
+      const isPk = c.pk;
+      const isFk = t.fks.some(f => f.col === c.name);
+      if (isPk || isFk) {
+        out.push('<text x="' + cx + '" y="' + cy + '" font-size="7.5" font-weight="700" fill="' +
+          (isPk ? ACCENT : MUTED) + '">' + (isPk ? 'PK' : 'FK') + '</text>');
+        cx += 17;
+      }
+      out.push('<text x="' + cx + '" y="' + cy + '" font-size="10" fill="' + INK + '">' + esc(c.name) + '</text>');
+      out.push('<text x="' + (x + CARD_W - 10) + '" y="' + cy + '" font-size="8" text-anchor="end" ' +
+        'font-family="Consolas, monospace" fill="' + MUTED + '">' +
+        esc(String(c.type || '').replace(/\(.*/, '').toLowerCase()) + '</text>');
+    });
+  }
+  out.push('</svg>');
+  return out.join('\n');
+}
+
 export function mountCanvasView(host, schema, hooks) {
   // hooks: { openTable(name), loadPositions() -> {name:{x,y}}, savePositions(pos) }
   host.textContent = '';
@@ -256,4 +330,6 @@ export function mountCanvasView(host, schema, hooks) {
       }
     }).catch(() => { /* engine offline — cards stay countless */ });
   }
+
+  return { svg: () => buildDiagramSvg(tables, pos) };
 }

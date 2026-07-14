@@ -20,6 +20,7 @@ pub fn run() {
             project::journal_append,
             project::import_read,
             project::export_write,
+            project::export_write_b64,
             project::query_rename,
             project::ui_state_read,
             project::ui_state_write,

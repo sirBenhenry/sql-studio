@@ -296,15 +296,27 @@ export function mountGrid(host, table, hooks) {
       more.addEventListener('click', () => { state.limit *= 2; load(); });
       head.appendChild(more);
     }
-    if (hooks.exportCsv && state.rows.length) {
-      const exp = el('button', 'btn small', '⇪ csv');
-      exp.title = 'export this table (respecting the filter) as a .csv file';
-      exp.addEventListener('click', async () => {
-        // the FULL matching table, not just the loaded page
-        const res = await hooks.exec('SELECT * FROM `' + state.table.name + '`' + filterWhere());
-        if (res) hooks.exportCsv(state.table.name, res.columns, res.rows);
-      });
-      head.appendChild(exp);
+    if (state.rows.length) {
+      const fullRows = async () => // the FULL matching table, not just the loaded page
+        await hooks.exec('SELECT * FROM `' + state.table.name + '`' + filterWhere());
+      if (hooks.exportCsv) {
+        const exp = el('button', 'btn small', '⇪ csv');
+        exp.title = 'export this table (respecting the filter) as a .csv file';
+        exp.addEventListener('click', async () => {
+          const res = await fullRows();
+          if (res) hooks.exportCsv(state.table.name, res.columns, res.rows);
+        });
+        head.appendChild(exp);
+      }
+      if (hooks.exportXlsx) {
+        const exp = el('button', 'btn small', '⇪ excel');
+        exp.title = 'export this table (respecting the filter) as an .xlsx file';
+        exp.addEventListener('click', async () => {
+          const res = await fullRows();
+          if (res) hooks.exportXlsx(state.table.name, res.columns, res.rows);
+        });
+        head.appendChild(exp);
+      }
     }
     const reload = el('button', 'btn small', '↻');
     reload.title = 'reload';

@@ -9,6 +9,7 @@ import { mountTablesDesigner, createTableDDL, modelFromSchema, diffModels, resol
 import { mountCanvasView } from './canvas-view.js';
 import { runTour, pressPulse } from './tour.js';
 import { parseCSV, inferCsvTable, toCSV } from './csv.js';
+import { buildXlsx, bytesToB64 } from './xlsx.js';
 
 const { invoke } = window.__TAURI__.core;
 const { open: openDialog } = window.__TAURI__.dialog;
@@ -171,6 +172,10 @@ function wireSettingsUI() {
   $('#set-export').addEventListener('click', async () => {
     openClose(false);
     await exportProjectDump();
+  });
+  $('#set-export-xlsx').addEventListener('click', async () => {
+    openClose(false);
+    await exportDbXlsx();
   });
 
   $('#set-rowlimit').addEventListener('change', e => {
@@ -641,7 +646,7 @@ function renderDbTab(host) {
   host.appendChild(body);
 
   if (dbViewMode === 'view') {
-    mountCanvasView(body, schemaModel(), {
+    const cv = mountCanvasView(body, schemaModel(), {
       openTable: openTableGrid,
       loadPositions() {
         return uiState.canvas ? JSON.parse(JSON.stringify(uiState.canvas)) : {};
@@ -663,6 +668,23 @@ function renderDbTab(host) {
         return counts;
       }
     });
+    if (cv) {
+      const svgBtn = el('button', 'btn small', '⇪ svg');
+      svgBtn.title = 'export this diagram (your arrangement) as an .svg image';
+      svgBtn.addEventListener('click', async () => {
+        const path = await window.__TAURI__.dialog.save({
+          title: 'Export the diagram as SVG',
+          defaultPath: (project ? project.name : 'schema') + '-diagram.svg',
+          filters: [{ name: 'SVG image', extensions: ['svg'] }]
+        });
+        if (!path) return;
+        try {
+          await invoke('export_write', { path, content: cv.svg() });
+          toast('diagram exported');
+        } catch (e) { toast(String(e)); }
+      });
+      bar.appendChild(svgBtn);
+    }
   } else {
     designer = mountTablesDesigner(body, schemaModel(), {
       runScript,
@@ -733,6 +755,18 @@ async function renderViewTab(t, host) {
         if (!path) return;
         try {
           await invoke('export_write', { path, content: toCSV(columns, rows) });
+          toast(rows.length + ' rows exported');
+        } catch (e) { toast(String(e)); }
+      },
+      async exportXlsx(name, columns, rows) {
+        const path = await window.__TAURI__.dialog.save({
+          title: 'Export ' + name + ' as Excel',
+          defaultPath: name + '.xlsx',
+          filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }]
+        });
+        if (!path) return;
+        try {
+          await invoke('export_write_b64', { path, b64: bytesToB64(buildXlsx([{ name, columns, rows }])) });
           toast(rows.length + ' rows exported');
         } catch (e) { toast(String(e)); }
       }
@@ -1542,6 +1576,41 @@ async function importCsv() {
     openTableGrid(t.name);
     toast(t.name + ' imported — ' + t.rowCount + ' rows');
   }
+}
+
+/** Settings → the whole database as one Excel workbook: each table its own
+ *  worksheet, parents before dependents (the FK values line up across
+ *  sheets exactly as they do in the database). */
+async function exportDbXlsx() {
+  if (!project) { toast('Open a project first.'); return; }
+  if (!engineRunning || !currentDb) { toast('The engine is not running.'); return; }
+  const model = schemaModel();
+  let shown;
+  try { shown = await invoke('db_exec', { sql: 'SHOW TABLES', db: currentDb }); }
+  catch (e) { toast(String(e)); return; }
+  const live = shown.rows.map(r => r[0]);
+  const order = snapshotTableOrder(model).filter(n => live.includes(n))
+    .concat(live.filter(n => !model.byName[n]).sort());
+  if (!order.length) { toast('No tables to export.'); return; }
+  const path = await window.__TAURI__.dialog.save({
+    title: 'Export the database as an Excel workbook',
+    defaultPath: (currentDb || project.name) + '.xlsx',
+    filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }]
+  });
+  if (!path) return;
+  const sheets = [];
+  let total = 0;
+  for (const name of order) {
+    try {
+      const r = await invoke('db_exec', { sql: 'SELECT * FROM `' + name + '`', db: currentDb });
+      sheets.push({ name, columns: r.columns, rows: r.rows });
+      total += r.rows.length;
+    } catch { /* table vanished mid-export — skip */ }
+  }
+  try {
+    await invoke('export_write_b64', { path, b64: bytesToB64(buildXlsx(sheets)) });
+    toast(sheets.length + ' tables · ' + total + ' rows exported');
+  } catch (e) { toast(String(e)); }
 }
 
 /** Settings → export the whole project as one runnable .sql */
