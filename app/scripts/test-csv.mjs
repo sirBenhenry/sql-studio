@@ -1,6 +1,6 @@
 // CSV import/export helpers: parsing, type inference, DDL/INSERT generation,
 // and the export writer.
-import { parseCSV, inferCsvTable, toCSV } from '../src/csv.js';
+import { parseCSV, parseTSV, inferCsvTable, toCSV } from '../src/csv.js';
 
 let fail = 0;
 const ck = (n, c, e) => { if (c) console.log('ok:', n); else { fail++; console.log('FAIL:', n, e ?? ''); } };
@@ -13,6 +13,11 @@ ck('quoted commas and "" escapes',
 ck('newline inside quotes', parseCSV('a\n"x\ny"\n')[1][0] === 'x\ny');
 ck('CRLF handled', JSON.stringify(parseCSV('a,b\r\n1,2\r\n')) === '[["a","b"],["1","2"]]');
 ck('empty trailing cells kept', parseCSV('a,b\n1,\n')[1].length === 2);
+
+// ---- parseTSV (the spreadsheet clipboard) ----
+ck('TSV rows and cells', JSON.stringify(parseTSV('a\tb\n1\t2\n')) === '[["a","b"],["1","2"]]', JSON.stringify(parseTSV('a\tb\n1\t2\n')));
+ck('TSV keeps commas plain', parseTSV('x,y\tz\n')[0][0] === 'x,y');
+ck('TSV quoted newline cell', parseTSV('"two\nlines"\tb\n')[0][0] === 'two\nlines');
 
 // ---- inferCsvTable ----
 const t1 = inferCsvTable('people.csv', parseCSV('id,name,salary,joined\n1,Anna,4200.50,2025-01-03\n2,Ben,3900,2025-02-14\n'));

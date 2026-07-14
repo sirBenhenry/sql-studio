@@ -3,9 +3,10 @@
 // Export: rows → RFC-4180-ish text Excel opens cleanly.
 'use strict';
 
-/** Parse CSV text: quoted fields, "" escapes, commas/newlines inside quotes,
- *  CRLF, trailing newline. Returns an array of rows (arrays of strings). */
-export function parseCSV(text) {
+/** Parse delimiter-separated text: quoted fields, "" escapes, the delimiter
+ *  and newlines inside quotes, CRLF, trailing newline. Returns rows of
+ *  strings. CSV uses ','; spreadsheet-clipboard paste uses '\t'. */
+function parseDSV(text, delim) {
   const rows = [];
   let row = [];
   let cur = '';
@@ -22,7 +23,7 @@ export function parseCSV(text) {
       continue;
     }
     if (ch === '"') { inQ = true; started = true; continue; }
-    if (ch === ',') { row.push(cur); cur = ''; started = true; continue; }
+    if (ch === delim) { row.push(cur); cur = ''; started = true; continue; }
     if (ch === '\r') continue;
     if (ch === '\n') {
       if (started || cur !== '' || row.length) { row.push(cur); rows.push(row); }
@@ -35,6 +36,10 @@ export function parseCSV(text) {
   if (started || cur !== '' || row.length) { row.push(cur); rows.push(row); }
   return rows;
 }
+
+export const parseCSV = text => parseDSV(text, ',');
+/** what Excel/Sheets put on the clipboard when you copy a cell block */
+export const parseTSV = text => parseDSV(text, '\t');
 
 const cleanIdent = (s, fallback) => {
   const c = String(s || '').trim().replace(/\s+/g, '_').replace(/[^\w$]/g, '');

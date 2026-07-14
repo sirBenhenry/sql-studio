@@ -245,6 +245,36 @@ ck('DELETE addressed by PK', del === 'DELETE FROM `item` WHERE `id` = 1 LIMIT 1'
   ck('export re-queries without LIMIT', execd.some(s => s.includes('WHERE') && !s.includes('LIMIT')), JSON.stringify(execd));
 }
 
+// --- spreadsheet paste into the + row: one confirmed multi-row INSERT ---
+{
+  const execd = [];
+  const journals = [];
+  let confirmMsg = null;
+  const hostP = document.createElement('div');
+  document.body.appendChild(hostP);
+  mountGrid(hostP, {
+    name: 'guests',
+    columns: [{ name: 'id', pk: true, autoInc: true, numeric: true }, { name: 'name' }, { name: 'city' }],
+    fks: []
+  }, {
+    exec: async sql => { execd.push(sql); return { columns: ['id', 'name', 'city'], rows: [], affected: 2, elapsed_ms: 0 }; },
+    journal: (source, stmts) => journals.push({ source, stmts }),
+    confirmDialog: async msg => { confirmMsg = msg; return true; }
+  });
+  await tick(); await tick();
+  // paste lands on the auto-inc 'id' input — mapping must skip it
+  const firstInp = hostP.querySelectorAll('tr.new-row input')[0];
+  const ev = new window.Event('paste', { bubbles: true, cancelable: true });
+  ev.clipboardData = { getData: () => 'Greta\tZurich\nHans\tBasel\n' };
+  firstInp.dispatchEvent(ev);
+  await tick(); await tick(); await tick();
+  ck('paste asks first with the row count', confirmMsg && confirmMsg.includes('Insert 2 pasted rows'), confirmMsg);
+  const ins = execd.find(s => s.startsWith('INSERT'));
+  ck('one multi-row INSERT, auto-inc skipped',
+    ins && ins.includes('(`name`, `city`)') && ins.includes("('Greta', 'Zurich')") && ins.includes("('Hans', 'Basel')"), ins);
+  ck('journaled once (one Ctrl+Z step)', journals.length === 1 && journals[0].source.includes('paste 2 rows'), JSON.stringify(journals.map(j => j.source)));
+}
+
 // --- a failing first load must show an error, not keep the old view ---
 {
   const hostErr = document.createElement('div');

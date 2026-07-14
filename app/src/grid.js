@@ -5,6 +5,8 @@
 // one the grid is read-only (shown in the header).
 'use strict';
 
+import { parseTSV } from './csv.js';
+
 export function mountGrid(host, table, hooks) {
   // hooks: { exec(sql) -> Promise<res|null>, journal(source, stmts), refreshCount() }
   const state = {
@@ -104,6 +106,38 @@ export function mountGrid(host, table, hooks) {
     const res = await hooks.exec(sql);
     if (res) {
       hooks.journal('grid: insert into ' + state.table.name, [sql]);
+      await load();
+    }
+  }
+
+  /** a multi-cell paste from a spreadsheet, landing on + row column
+   *  `startIdx`: one confirmed, journaled, multi-row INSERT (one Ctrl+Z) */
+  async function pasteRows(startIdx, tsvRows) {
+    const rows = tsvRows.filter(r => r.some(v => String(v ?? '').trim() !== ''));
+    if (!rows.length) return;
+    const width = Math.max(...rows.map(r => r.length));
+    // pasted block maps left-to-right from where it landed; auto-inc
+    // columns inside the block are skipped (the db numbers those)
+    const targets = [];
+    for (let i = startIdx; i < state.columns.length && targets.length < width; i++) {
+      const def = state.table.columns.find(x => x.name === state.columns[i]);
+      if (def && def.autoInc) continue;
+      targets.push(state.columns[i]);
+    }
+    if (!targets.length) return;
+    const needConfirm = !hooks.shouldConfirm || hooks.shouldConfirm();
+    if (needConfirm || rows.length > 1) {
+      const msg = 'Insert ' + rows.length + ' pasted row' + (rows.length === 1 ? '' : 's') +
+        ' into ' + state.table.name + '?\n\ncolumns: ' + targets.join(', ');
+      const okGo = hooks.confirmDialog ? await hooks.confirmDialog(msg) : window.confirm(msg);
+      if (!okGo) return;
+    }
+    const sql = 'INSERT INTO `' + state.table.name + '` (' +
+      targets.map(c => '`' + c + '`').join(', ') + ') VALUES\n' +
+      rows.map(r => ' (' + targets.map((c, i) => lit(r[i] != null && String(r[i]).trim() !== '' ? r[i] : null, c)).join(', ') + ')').join(',\n');
+    const res = await hooks.exec(sql);
+    if (res) {
+      hooks.journal('grid: paste ' + rows.length + ' rows into ' + state.table.name, [sql]);
       await load();
     }
   }
@@ -324,7 +358,7 @@ export function mountGrid(host, table, hooks) {
     if (editable) {
       const tr = el('tr', 'new-row');
       const inputs = [];
-      state.columns.forEach(c => {
+      state.columns.forEach((c, colIdx) => {
         const td = el('td');
         const def = state.table.columns.find(x => x.name === c);
         const inp = el('input', 'cell-edit');
@@ -334,6 +368,13 @@ export function mountGrid(host, table, hooks) {
         inputs.push(inp);
         inp.addEventListener('keydown', e => {
           if (e.key === 'Enter') insertRow(inputs.map(i => i.value));
+        });
+        // a spreadsheet block pasted here becomes rows (single-cell paste stays native)
+        inp.addEventListener('paste', e => {
+          const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+          if (!/[\t\n]/.test(text)) return;
+          e.preventDefault();
+          pasteRows(colIdx, parseTSV(text));
         });
         td.appendChild(inp);
         tr.appendChild(td);
