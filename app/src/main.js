@@ -630,6 +630,58 @@ function renderDbTab(host) {
   }
   bar.appendChild(seg);
   if (dbViewMode === 'view') {
+    /* global search: where does this value appear, across EVERY table? */
+    const gs = el('input', 'grid-filter gsearch');
+    gs.type = 'text';
+    gs.spellcheck = false;
+    gs.placeholder = 'find in all tables…';
+    gs.title = 'searches every column of every table; click a hit to open that table filtered';
+    const results = el('span', 'gsearch-hits');
+    let gsT = null;
+    let gsSeq = 0;
+    const escLike = q => q.replace(/\\/g, '\\\\\\\\').replace(/([%_])/g, '\\$1').replace(/'/g, "''");
+    async function globalSearch() {
+      const q = gs.value.trim();
+      results.textContent = '';
+      if (!q || !engineRunning || !currentDb) return;
+      const seq = ++gsSeq;
+      const model = schemaModel();
+      const hits = [];
+      for (const t of model.tables) {
+        if (seq !== gsSeq) return; // superseded by newer input
+        const conds = t.columns.map(c => 'CAST(`' + c.name + "` AS CHAR) LIKE '%" + escLike(q) + "%'").join(' OR ');
+        try {
+          const r = await invoke('db_exec', {
+            sql: 'SELECT COUNT(*) FROM `' + t.name + '` WHERE ' + conds, db: currentDb
+          });
+          const n = r.rows[0] ? Number(r.rows[0][0]) : 0;
+          if (n > 0) hits.push({ table: t.name, n });
+        } catch { /* table not in the db — skip */ }
+      }
+      if (seq !== gsSeq) return;
+      if (!hits.length) { results.appendChild(el('span', 'gsearch-none', 'no matches')); return; }
+      for (const h of hits) {
+        const b = el('button', 'gsearch-hit', h.table + ' · ' + h.n);
+        b.title = 'open ' + h.table + ' showing only the ' + h.n + ' matching row' + (h.n === 1 ? '' : 's');
+        b.addEventListener('click', () => openTableGrid(h.table, q));
+        results.appendChild(b);
+      }
+    }
+    gs.addEventListener('input', () => {
+      clearTimeout(gsT);
+      gsT = setTimeout(globalSearch, 300);
+    });
+    gs.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        const first = results.querySelector('.gsearch-hit');
+        if (first) first.click();
+      } else if (e.key === 'Escape') {
+        gs.value = '';
+        results.textContent = '';
+      }
+    });
+    bar.appendChild(gs);
+    bar.appendChild(results);
     bar.appendChild(el('span', 'dz-hint', 'Drag cards by their header, the background to pan · wheel pans, ctrl+wheel zooms · ▦ opens the data'));
     const reset = el('button', 'btn small', 'reset layout');
     reset.title = 'forget dragged positions and lay the diagram out again';
@@ -733,6 +785,7 @@ async function renderViewTab(t, host) {
     const def = model.byName[name];
     if (!def) { host.textContent = ''; host.appendChild(el('p', 'hint pad', 'table ' + name + ' is not in the schema anymore')); return; }
     mountGrid(host, def, {
+      initialFilter: t.filter || '',
       exec: async sql => {
         const mutation = !/^SELECT\b/i.test(sql.trim());
         try {
@@ -774,10 +827,13 @@ async function renderViewTab(t, host) {
   }
 }
 
-function openTableGrid(name) {
+function openTableGrid(name, filter) {
   const id = 't:' + name;
-  if (!tabById(id)) {
-    tabs.push({ id, label: '▦ ' + name, kind: 'view', closable: true });
+  const existing = tabById(id);
+  if (!existing) {
+    tabs.push({ id, label: '▦ ' + name, kind: 'view', closable: true, filter: filter || '' });
+  } else if (filter != null) {
+    existing.filter = filter; // a search jump refocuses an open grid
   }
   activateTab(id);
 }

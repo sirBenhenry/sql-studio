@@ -245,6 +245,25 @@ ck('DELETE addressed by PK', del === 'DELETE FROM `item` WHERE `id` = 1 LIMIT 1'
   ck('export re-queries without LIMIT', execd.some(s => s.includes('WHERE') && !s.includes('LIMIT')), JSON.stringify(execd));
 }
 
+// --- a grid mounted with an initial filter (global-search jump) filters at once ---
+{
+  const execd = [];
+  const hostI = document.createElement('div');
+  document.body.appendChild(hostI);
+  mountGrid(hostI, {
+    name: 'jmp',
+    columns: [{ name: 'id', pk: true, numeric: true }, { name: 'name' }],
+    fks: []
+  }, {
+    initialFilter: 'Anna',
+    exec: async sql => { execd.push(sql); return { columns: ['id', 'name'], rows: [['1', 'Anna']], affected: 0, elapsed_ms: 0 }; },
+    journal: () => {}
+  });
+  await tick(); await tick();
+  ck('initial filter applied on first load', execd[0].includes("LIKE '%Anna%'"), execd[0]);
+  ck('find box shows the search', hostI.querySelector('.grid-filter').value === 'Anna');
+}
+
 // --- spreadsheet paste into the + row: one confirmed multi-row INSERT ---
 {
   const execd = [];

@@ -387,6 +387,10 @@ body.split-drag { user-select: none; }
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   position: sticky; top: 0; background: var(--bg); z-index: 5;
+  flex-wrap: wrap; /* search + hits + hint share the row gracefully */
+}
+.dbtab-bar .dz-hint {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dbtab-body { position: relative; }
 
@@ -558,6 +562,15 @@ body.split-drag { user-select: none; }
   font-family: var(--mono); font-size: .74rem; padding: 4px 8px; outline: none;
 }
 .grid-filter:focus { border-color: var(--accent); }
+.gsearch { width: 170px; flex: 0 0 auto; }
+.gsearch-hits { display: inline-flex; gap: 4px; flex-wrap: wrap; align-items: center; min-width: 0; }
+.gsearch-hit {
+  background: var(--ink); color: var(--bg); border: 1px solid var(--ink);
+  font-family: var(--mono); font-size: .66rem; padding: 2px 8px; cursor: pointer;
+  white-space: nowrap;
+}
+.gsearch-hit:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.gsearch-none { color: var(--muted); font-size: .72rem; }
 .grid-scroll { overflow-y: auto; overflow-x: hidden; padding: 12px 14px; }
 .grid-scroll .result-table { width: 100%; table-layout: auto; }
 .grid-table td { user-select: text; }

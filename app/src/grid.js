@@ -15,7 +15,7 @@ export function mountGrid(host, table, hooks) {
     columns: [],
     limit: (hooks.rowLimit && hooks.rowLimit()) || 500,
     sort: null,     // { col, dir: 'ASC'|'DESC' }
-    filter: '',     // server-side: matches ANY column, works past the limit
+    filter: (hooks.initialFilter || ''), // server-side: any column, past the limit
     dirty: false
   };
 
