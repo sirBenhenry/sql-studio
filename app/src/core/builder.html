@@ -308,6 +308,8 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 24px 80px; }
 .chip:hover { border-color: var(--ink); border-bottom-color: var(--cc); }
 .chip .x { font-weight: 400; color: var(--muted); padding: 0 1px; font-size: .82em; }
 .chip .x:hover { color: var(--accent); }
+/* fields of a not-yet-joined table: dashed = "clicking pulls that table in" */
+.chip-join { border-style: dashed; border-bottom: 3px solid var(--cat-table); }
 
 .chip.cat-table { --cc: var(--cat-table); }
 .chip.cat-col   { --cc: var(--cat-col); }
@@ -2901,7 +2903,8 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       };
 
       for (const t of tablesInQuery()) {
-        box.appendChild(el('label', null, t));
+        const jn = Q.joins.find(j => j.table === t);
+        box.appendChild(el('label', null, jn ? t + '  — connected through ' + jn.baseTable + '.' + jn.baseCol : t));
         const chips = el('div', 'chips');
         chips.style.marginBottom = '10px';
         for (const c of colsOf(t)) chips.appendChild(colChip(t, c.name));
@@ -2911,12 +2914,12 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         for (const c of colsOf(t)) {
           const fk = fkOf(t, c.name);
           if (!fk || tablesInQuery().includes(fk.refTable)) continue;
-          const lab = el('label', null, '↳ via ' + c.name + ' → ' + fk.refTable + ' (adds a join)');
+          const lab = el('label', null, '+ the ' + fk.refTable + ' behind ' + c.name + ' — click a field to pull that table in');
           box.appendChild(lab);
           const fchips = el('div', 'chips');
           fchips.style.marginBottom = '10px';
           for (const rc of colsOf(fk.refTable)) {
-            const chip = el('span', 'chip cat-col', rc.name);
+            const chip = el('span', 'chip cat-col chip-join', rc.name);
             chip.addEventListener('click', () => {
               ensureFkJoin(t, c.name, fk.refTable, fk.refCol);
               if (selIdx(fk.refTable, rc.name) < 0) Q.select.push({ kind: 'col', table: fk.refTable, col: rc.name });
@@ -3201,7 +3204,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
      Returns a .sub-box element with a ._collect() to write the form back. */
   function makeSubForm(host, scalar) {
     const sb = el('div', 'sub-box');
-    sb.appendChild(el('h5', null, 'mini-query  (SELECT … FROM …)'));
+    sb.appendChild(el('h5', null, 'calculate a value from a table — e.g. “the average players of session”'));
 
     if (!host.sub || !schema.byName[host.sub.table]) {
       const t0 = schema.tables[0].name;
@@ -3455,7 +3458,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
 
         body.appendChild(el('label', null, 'compare with'));
         body.appendChild(radioRow('hsrc-u', [
-          { v: 'value', label: 'a value' }, { v: 'sub', label: 'a mini-query' }
+          { v: 'value', label: 'a value' }, { v: 'sub', label: 'a calculated value — average, biggest, count…' }
         ], h.src, v => { h.src = v; renderRhs(); }));
 
         const rhsArea = el('div');
@@ -3540,8 +3543,8 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
         // choose the source of the comparison value
         if (kind === 'scalar' || kind === 'set') {
           const opts = kind === 'scalar'
-            ? [{ v: 'value', label: 'a value' }, { v: 'column', label: 'another column' }, { v: 'sub', label: 'a mini-query' }]
-            : [{ v: 'value', label: 'a list of values' }, { v: 'sub', label: 'a mini-query' }];
+            ? [{ v: 'value', label: 'a value' }, { v: 'column', label: 'another column' }, { v: 'sub', label: 'a calculated value — average, biggest, count…' }]
+            : [{ v: 'value', label: 'a list of values' }, { v: 'sub', label: 'a list taken from a table (mini-query)' }];
           if (fk) opts.push({ v: 'lookup', label: 'a ' + fk.refTable + ' looked up by name' });
           if (!opts.some(o => o.v === w.src)) w.src = 'value';
           srcArea.appendChild(el('label', null, 'compare with'));
@@ -3773,7 +3776,7 @@ INSERT INTO loan (fk_book_id, fk_member_id, borrowed_at, returned_at) VALUES
       /* ----- RIGHT: value or mini-query ----- */
       box.appendChild(el('label', null, 'compare with'));
       box.appendChild(radioRow('hsrc', [
-        { v: 'value', label: 'a value' }, { v: 'sub', label: 'a mini-query' }
+        { v: 'value', label: 'a value' }, { v: 'sub', label: 'a calculated value — average, biggest, count…' }
       ], h.src, v => { h.src = v; renderRhs(); }));
 
       const rhsArea = el('div');
