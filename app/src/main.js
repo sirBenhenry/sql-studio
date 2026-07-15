@@ -2287,6 +2287,14 @@ wireSettingsUI();
 applyTheme();
 applyFontSize();
 
+// real version in the status bar (tauri.conf.json is the single source)
+try {
+  window.__TAURI__.app.getVersion().then(v => {
+    const s = $('#status-right');
+    if (s.textContent === 'SQL Studio') s.textContent = 'SQL Studio ' + v;
+  });
+} catch { /* app API unavailable (tests) */ }
+
 // straight back to work: reopen the last project when the setting says so
 if (SETTINGS.reopenLast) {
   const rec = getRecents();

@@ -16,7 +16,9 @@ Built as a learning + productivity tool for writing MySQL by hand.
 - **Everything synced** — edit `schema.sql` by hand and Ctrl+S applies the diff to the database (confirmed); every applied change is journaled; `data.sql` is a live snapshot, so any copy of the folder rebuilds the identical database.
 - **Import** a `.sql` dump from Settings; friendly plain-language hints under MySQL errors; an onboarding tour that walks the whole workflow.
 
-Build it: `cd app && npm i && node scripts/fetch-engine.mjs && npx tauri build` (see `app/SETUP.md`). Windows only for now.
+**Install it:** grab the latest `SQL Studio_x.x.x_x64-setup.exe` from [Releases](../../releases). Windows only for now.
+
+Or build it yourself: `cd app && npm i && node scripts/fetch-engine.mjs && npx tauri build` (see `app/SETUP.md`).
 
 ## The lite tool: what it does
 
