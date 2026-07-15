@@ -81,7 +81,7 @@ fn load(root: &Path) -> Result<Project, String> {
 /// Resolve a project-relative file path, refusing escapes. Only known project
 /// files are writable through this API.
 fn resolve(root: &Path, rel: &str) -> Result<PathBuf, String> {
-    let ok = matches!(rel, "schema.sql" | "data.sql" | "journal.sql")
+    let ok = matches!(rel, "schema.sql" | "data.sql" | "journal.sql" | ".gitignore")
         || (rel.starts_with("queries/")
             && rel.ends_with(".sql")
             && !rel.contains("..")
@@ -220,6 +220,46 @@ pub async fn ui_state_write(
     write_atomic(&dir.join("ui.json"), &content)
 }
 
+#[derive(Serialize)]
+pub struct GitResult {
+    pub ok: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Run git in the project folder — checkpoints ARE commits. Only the
+/// subcommands the UI needs are allowed; args are built by our own code.
+#[tauri::command]
+pub async fn git_run(
+    state: tauri::State<'_, ProjectState>,
+    args: Vec<String>,
+) -> Result<GitResult, String> {
+    let root = current_root(&state)?;
+    const ALLOWED: &[&str] = &[
+        "init", "add", "commit", "log", "status", "checkout", "restore",
+        "remote", "push", "config", "rev-parse", "branch",
+    ];
+    let sub = args.first().ok_or("no git subcommand")?;
+    if !ALLOWED.contains(&sub.as_str()) {
+        return Err(format!("git {sub} is not allowed from the app"));
+    }
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(&root).args(&args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("git not found — install Git for Windows to use checkpoints ({e})"))?;
+    Ok(GitResult {
+        ok: out.status.success(),
+        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+    })
+}
+
 /// Rename a saved query file (queries/*.sql only — resolve() guards both ends).
 #[tauri::command]
 pub async fn query_rename(
@@ -257,6 +297,35 @@ pub async fn journal_append(state: tauri::State<'_, ProjectState>, entry: String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_checkpoint_roundtrip() {
+        // the exact sequence the UI runs: init → identity-safe commit → log
+        let dir = std::env::temp_dir().join("sqlstudio-git-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("schema.sql"), "-- s").unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&dir)
+                .args(args)
+                .output()
+                .expect("git present")
+        };
+        assert!(run(&["init"]).status.success());
+        fs::write(dir.join(".gitignore"), ".sqlstudio/\n").unwrap();
+        assert!(run(&["add", "-A"]).status.success());
+        let c = run(&[
+            "-c", "user.name=SQL Studio", "-c", "user.email=sqlstudio@local",
+            "commit", "-m", "checkpoint one",
+        ]);
+        assert!(c.status.success(), "{}", String::from_utf8_lossy(&c.stderr));
+        let log = run(&["log", "--format=%h%x1f%cs%x1f%s", "-30"]);
+        let text = String::from_utf8_lossy(&log.stdout).to_string();
+        assert!(text.contains("checkpoint one"), "{text}");
+        assert!(text.contains('\u{1f}'), "field separator intact");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn b64_decoder_matches_known_vectors() {

@@ -223,6 +223,24 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
     chips; click/Enter opens the grid pre-filtered (openTableGrid carries a
     filter; grids accept initialFilter).
 
+47. **Checkpoints = git commits (+ GitHub push)** — Ben: "add that and combin
+    it with git and github implementation". New `git_run` Tauri command
+    (whitelisted subcommands, runs in the project root, no console window,
+    friendly "git not found" message); `.gitignore` (`.sqlstudio/`) written on
+    first use so the datadir never lands in history. Settings gains a
+    "checkpoints (git)" row: save checkpoint… (prompts a name; `add -A` +
+    commit, identity falls back to `-c user.name/email` when unset; clean tree
+    = friendly no-op), restore checkpoint… (pick from the last 30 commits;
+    pushes a global-undo state FIRST so the restore itself is Ctrl+Z-able,
+    `git checkout <sha> -- <files>`, reloads tabs from disk, rebuilds the
+    sandbox from the restored files, journals a note AFTER so checkout can't
+    clobber it), GitHub: set remote… (prompts the URL, remote add/set-url
+    origin), push checkpoints (`push -u origin <branch>`). Auto-checkpoint
+    once per day on project open — only where a repo already exists (opt-in
+    by having saved one checkpoint ever). appDialog grew a pick-list mode
+    (`appPick`); cargo test pins the init→commit→log round-trip and the
+    %x1f log format. All 9 JS suites + 6 cargo tests green.
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much

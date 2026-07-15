@@ -26,7 +26,7 @@ const el = (tag, cls, text) => {
    window.confirm/prompt do NOT display in this webview (they silently
    auto-accept) — every yes/no in the app goes through these DOM modals. */
 
-function appDialog({ title, message, ok, cancel, danger, input, value }) {
+function appDialog({ title, message, ok, cancel, danger, input, value, items }) {
   return new Promise(resolve => {
     const back = el('div', 'cfm-backdrop');
     const box = el('div', 'cfm-modal');
@@ -40,14 +40,28 @@ function appDialog({ title, message, ok, cancel, danger, input, value }) {
       inp.value = value || '';
     }
     if (inp) box.appendChild(inp);
+    if (items) {
+      // a pick-one list: resolves the item's value, skipping the OK button
+      const list = el('div', 'cfm-list');
+      for (const it of items) {
+        const b = el('button', 'cfm-item', it.label);
+        b.addEventListener('click', () => done(it.value));
+        list.appendChild(b);
+      }
+      box.appendChild(list);
+    }
     const row = el('div', 'cfm-actions');
     const cancelBtn = el('button', 'btn small', cancel || 'Cancel');
-    const okBtn = el('button', 'btn small primary' + (danger ? ' cfm-danger' : ''), ok || 'Continue');
     row.appendChild(cancelBtn);
-    row.appendChild(okBtn);
+    let okBtn = null;
+    if (!items) {
+      okBtn = el('button', 'btn small primary' + (danger ? ' cfm-danger' : ''), ok || 'Continue');
+      row.appendChild(okBtn);
+    }
     box.appendChild(row);
     document.body.appendChild(back);
     document.body.appendChild(box);
+    const nothing = (input || items) ? null : false;
     const done = val => {
       back.remove();
       box.remove();
@@ -55,20 +69,21 @@ function appDialog({ title, message, ok, cancel, danger, input, value }) {
       resolve(val);
     };
     const onKey = e => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(input ? null : false); }
-      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); done(input ? (inp.value ?? '') : true); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(nothing); }
+      else if (e.key === 'Enter' && !items) { e.preventDefault(); e.stopPropagation(); done(input ? (inp.value ?? '') : true); }
     };
     document.addEventListener('keydown', onKey, true);
-    cancelBtn.addEventListener('click', () => done(input ? null : false));
-    okBtn.addEventListener('click', () => done(input ? (inp.value ?? '') : true));
-    back.addEventListener('click', () => done(input ? null : false));
-    (inp || okBtn).focus();
+    cancelBtn.addEventListener('click', () => done(nothing));
+    if (okBtn) okBtn.addEventListener('click', () => done(input ? (inp.value ?? '') : true));
+    back.addEventListener('click', () => done(nothing));
+    (inp || okBtn || cancelBtn).focus();
     if (inp) inp.select();
   });
 }
 
 const appConfirm = (message, opts = {}) => appDialog({ message, danger: true, ...opts });
 const appPrompt = (title, value) => appDialog({ title, input: true, value, ok: 'OK' });
+const appPick = (title, items, message) => appDialog({ title, items, message });
 
 function toast(msg) {
   const t = $('#toast');
@@ -176,6 +191,23 @@ function wireSettingsUI() {
   $('#set-export-xlsx').addEventListener('click', async () => {
     openClose(false);
     await exportDbXlsx();
+  });
+  $('#set-ckpt-save').addEventListener('click', async () => {
+    openClose(false);
+    const name = await appPrompt('Name this checkpoint', 'checkpoint ' + new Date().toISOString().slice(0, 16).replace('T', ' '));
+    if (name != null && name.trim()) await saveCheckpoint(name.trim());
+  });
+  $('#set-ckpt-restore').addEventListener('click', async () => {
+    openClose(false);
+    await restoreCheckpoint();
+  });
+  $('#set-ckpt-remote').addEventListener('click', async () => {
+    openClose(false);
+    await setGithubRemote();
+  });
+  $('#set-ckpt-push').addEventListener('click', async () => {
+    openClose(false);
+    await pushCheckpoints();
   });
 
   $('#set-rowlimit').addEventListener('change', e => {
@@ -1258,6 +1290,7 @@ async function startEngine(root) {
     logNote('engine ready — this project is a live database');
     await reconcile();
     firePendingTour();
+    autoCheckpoint(); // once per day, only where a repo already exists
   } catch (e) {
     engineRunning = false;
     setEngineStatus('● engine: failed', 'err');
@@ -1597,6 +1630,153 @@ document.addEventListener('keydown', e => {
   e.preventDefault();
   showShortcuts();
 });
+
+/* ================= checkpoints = git commits =================
+   The project is plain files, so history is just git: a checkpoint is a
+   commit, restore is a checkout + rebuild, and GitHub is a remote. The
+   repo is created lazily on the first checkpoint; .sqlstudio/ (engine
+   datadir!) is ignored. */
+
+async function git(...args) {
+  return await invoke('git_run', { args });
+}
+
+async function ensureRepo() {
+  const probe = await git('rev-parse', '--is-inside-work-tree');
+  if (probe.ok && probe.stdout.trim() === 'true') return true;
+  const init = await git('init');
+  if (!init.ok) { toast(init.stderr || 'git init failed'); return false; }
+  // the engine datadir must NEVER be committed
+  await invoke('file_write', { rel: '.gitignore', content: '.sqlstudio/\n' });
+  logNote('git repository created for this project (checkpoints live here)');
+  return true;
+}
+
+/** commit args that work even on machines without a git identity */
+async function identityArgs() {
+  const name = await git('config', 'user.name');
+  if (name.ok && name.stdout.trim()) return [];
+  return ['-c', 'user.name=SQL Studio', '-c', 'user.email=sqlstudio@local'];
+}
+
+async function saveCheckpoint(name, { quiet = false } = {}) {
+  if (!project) { toast('Open a project first.'); return false; }
+  if (!(await ensureRepo())) return false;
+  const add = await git('add', '-A');
+  if (!add.ok) { toast(add.stderr || 'git add failed'); return false; }
+  const st = await git('status', '--porcelain');
+  if (st.ok && !st.stdout.trim()) {
+    if (!quiet) toast('Nothing changed since the last checkpoint.');
+    return false;
+  }
+  const idc = await identityArgs();
+  const c = await git(...idc, 'commit', '-m', name);
+  if (!c.ok) { toast((c.stderr || c.stdout || 'commit failed').split('\n')[0]); return false; }
+  if (!quiet) toast('checkpoint saved: ' + name);
+  return true;
+}
+
+async function restoreCheckpoint() {
+  if (!project || !engineRunning) { toast('Open a project first (engine running).'); return; }
+  const log = await git('log', '--format=%h%x1f%cs%x1f%s', '-30');
+  if (!log.ok || !log.stdout.trim()) { toast('No checkpoints yet — save one first.'); return; }
+  const items = log.stdout.trim().split('\n').map(line => {
+    const [sha, date, ...msg] = line.split('\x1f');
+    return { value: sha, label: date + '  ·  ' + msg.join('\x1f') };
+  });
+  const sha = await appPick('Restore which checkpoint?', items,
+    'The project files AND the database go back to that state.\n(The restore itself is one Ctrl+Z step.)');
+  if (!sha) return;
+  const picked = items.find(i => i.value === sha);
+  // the pre-restore state becomes an undo step (checkout clobbers files,
+  // so capture BEFORE; the journal note is appended AFTER, so it survives)
+  pushUndo('restore checkpoint');
+  const co = await git('checkout', sha, '--', 'schema.sql', 'data.sql', 'journal.sql', 'queries');
+  if (!co.ok) {
+    // queries/ may not exist in old commits — retry with just the core files
+    const co2 = await git('checkout', sha, '--', 'schema.sql', 'data.sql');
+    if (!co2.ok) { toast(co2.stderr || 'restore failed'); return; }
+  }
+  // reload the files from disk into the tabs, then rebuild the database
+  const restoring0 = restoring;
+  restoring = true;
+  try {
+    clearTimeout(snapshotTimer);
+    for (const rel of ['schema.sql', 'data.sql', 'journal.sql']) {
+      const id = rel.split('.')[0];
+      const t = tabById(id);
+      if (!t) continue;
+      try {
+        t.content = await invoke('file_read', { rel });
+        t.savedContent = t.content;
+      } catch { /* file absent in that commit — keep current */ }
+    }
+    const s = tabById('schema');
+    const d = tabById('data');
+    const okS = await runScriptFast(s.content, 'restore: schema', { journal: false });
+    if (okS) {
+      currentDb = findCurrentDb(s.content) || currentDb;
+      if (splitSQL(d.content).length) await runScriptFast(d.content, 'restore: data', { journal: false });
+    }
+    if (activeTab && tabById(activeTab) && tabById(activeTab).kind !== 'view') setEditorText(tabById(activeTab).content);
+    renderTabs();
+    reflectDb();
+    if (builder) builder.setSchema(s.content);
+    const v = $('#view-host');
+    if (v && activeTab === 'db') renderDbTab(v);
+    else if (v && String(activeTab).startsWith('t:')) renderViewTab(tabById(activeTab), v);
+    settleState();
+  } finally {
+    restoring = restoring0;
+  }
+  try {
+    const entry = journalEntry('restore checkpoint', ['-- restored ' + sha + ' (' + picked.label + ')']);
+    await invoke('journal_append', { entry });
+    const jt = tabById('journal');
+    if (jt) { jt.content += entry; jt.savedContent = jt.content; }
+  } catch { /* the restore itself succeeded — the note is best-effort */ }
+  logOk('checkpoint restored: ' + picked.label);
+  toast('restored — Ctrl+Z brings you back');
+}
+
+async function setGithubRemote() {
+  if (!project) { toast('Open a project first.'); return; }
+  if (!(await ensureRepo())) return;
+  const cur = await git('remote', 'get-url', 'origin');
+  const url = await appPrompt('GitHub repository URL (create an empty repo there first)',
+    cur.ok ? cur.stdout.trim() : 'git@github.com:you/' + project.name + '.git');
+  if (url == null || !url.trim()) return;
+  const r = cur.ok
+    ? await git('remote', 'set-url', 'origin', url.trim())
+    : await git('remote', 'add', 'origin', url.trim());
+  if (!r.ok) { toast(r.stderr || 'setting the remote failed'); return; }
+  toast('remote set — use "push checkpoints" to upload');
+}
+
+async function pushCheckpoints() {
+  if (!project) { toast('Open a project first.'); return; }
+  const cur = await git('remote', 'get-url', 'origin');
+  if (!cur.ok) { toast('Set the GitHub remote first.'); return; }
+  logNote('pushing checkpoints to ' + cur.stdout.trim() + '…');
+  const branch = await git('branch', '--show-current');
+  const r = await git('push', '-u', 'origin', (branch.stdout || '').trim() || 'HEAD');
+  if (r.ok) { logOk('pushed'); toast('checkpoints pushed to GitHub'); }
+  else { logErr(r.stderr || 'push failed'); toast('push failed — see the console'); }
+}
+
+/** a quiet safety checkpoint, once per day, only if a repo already exists */
+async function autoCheckpoint() {
+  try {
+    const probe = await git('rev-parse', '--is-inside-work-tree');
+    if (!probe.ok || probe.stdout.trim() !== 'true') return;
+    const last = await git('log', '-1', '--format=%cs');
+    const today = new Date().toISOString().slice(0, 10);
+    if (last.ok && last.stdout.trim() === today) return;
+    if (await saveCheckpoint('auto checkpoint ' + today, { quiet: true })) {
+      logNote('daily safety checkpoint saved');
+    }
+  } catch { /* git absent — checkpoints are opt-in anyway */ }
+}
 
 /* ================= CSV import / exports ================= */
 
