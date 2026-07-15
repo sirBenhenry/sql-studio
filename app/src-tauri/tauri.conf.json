@@ -11,6 +11,7 @@
     "windows": [
       {
         "title": "SQL Studio",
+        "decorations": false,
         "width": 1440,
         "height": 900,
         "minWidth": 980,

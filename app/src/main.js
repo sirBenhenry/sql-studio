@@ -2256,19 +2256,33 @@ wireSplitter('#splitter-h', '--console-h', true);
 try {
   const appWindow = window.__TAURI__.window.getCurrentWindow();
   appWindow.onCloseRequested(async event => {
-    // a tour abandoned by closing the app must not leave its demo db behind
-    if (tourDemo) await endTourDemo();
-    const dirty = tabs.filter(t =>
-      t.kind !== 'view' && !t.readonly && t.content !== t.savedContent &&
-      !(tourDemo && t.id === 'schema'));
-    if (!dirty.length) return;
-    const stay = !(await window.__TAURI__.dialog.ask(
-      dirty.map(t => '· ' + t.label).join('\n') + '\n\nClose anyway? Unsaved edits are lost.',
-      { title: 'Unsaved changes', kind: 'warning', okLabel: 'Close anyway', cancelLabel: 'Keep working' }
-    ));
-    if (stay) event.preventDefault();
+    // the whole guard is fail-open: once a listener is registered, Tauri
+    // only closes the window if this handler finishes without preventDefault
+    // — an error in here would make the ✕ dead forever
+    try {
+      // a tour abandoned by closing the app must not leave its demo db behind
+      if (tourDemo) await endTourDemo();
+      const dirty = tabs.filter(t =>
+        t.kind !== 'view' && !t.readonly && t.content !== t.savedContent &&
+        !(tourDemo && t.id === 'schema'));
+      if (!dirty.length) return;
+      const stay = !(await window.__TAURI__.dialog.ask(
+        dirty.map(t => '· ' + t.label).join('\n') + '\n\nClose anyway? Unsaved edits are lost.',
+        { title: 'Unsaved changes', kind: 'warning', okLabel: 'Close anyway', cancelLabel: 'Keep working' }
+      ));
+      if (stay) event.preventDefault();
+    } catch { /* fail open — close proceeds */ }
   });
-} catch { /* window API unavailable (tests) — no guard */ }
+
+  /* custom titlebar buttons (decorations:false — the topbar IS the titlebar) */
+  $('#win-min').addEventListener('click', () => appWindow.minimize());
+  $('#win-max').addEventListener('click', () => appWindow.toggleMaximize());
+  $('#win-close').addEventListener('click', () => appWindow.close());
+} catch {
+  // window API unavailable (tests / plain browser) — no guard, no controls
+  const wc = document.querySelector('.win-controls');
+  if (wc) wc.hidden = true;
+}
 
 $('#btn-new-project').addEventListener('click', newProject);
 $('#btn-open-project').addEventListener('click', openProject);

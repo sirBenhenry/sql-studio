@@ -9,9 +9,9 @@
 <body>
 
   <!-- ======= top bar ======= -->
-  <header id="topbar">
-    <div class="brand">SQL<span class="accent">*</span>Studio</div>
-    <div id="project-label" class="project-label"></div>
+  <header id="topbar" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region>SQL<span class="accent" data-tauri-drag-region>*</span>Studio</div>
+    <div id="project-label" class="project-label" data-tauri-drag-region></div>
     <div class="topbar-right">
       <div id="lang-toggle" class="lang-switch" title="Two views of the same builder: natural wording, or SQL statements">
         <button class="lang-opt" data-lang="natural">Natural</button>
@@ -19,6 +19,11 @@
       </div>
       <button id="btn-help" title="Keyboard shortcuts (?)">?</button>
       <button id="btn-settings" title="Settings">⚙</button>
+      <div class="win-controls">
+        <button id="win-min" title="Minimize" aria-label="Minimize">─</button>
+        <button id="win-max" title="Maximize / restore" aria-label="Maximize">□</button>
+        <button id="win-close" title="Close" aria-label="Close">✕</button>
+      </div>
     </div>
   </header>
 
