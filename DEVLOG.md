@@ -203,6 +203,26 @@ running; release installer in src-tauri/target/release/bundle/nsis/.
     --code-size), reopen-last-project on start, default FK rules for new
     foreign keys (designer reads them), undo-depth (global undo honors it).
 
+## Ask-then-build loop (Ben approving each item)
+
+42. **Run saved queries** — Ctrl+Enter runs the selection anywhere / a query
+    tab whole (▶ in the tab bar); whole-file locked to query tabs (schema.sql
+    starts with DROP DATABASE); writes journaled, reads not.
+43. **Spreadsheet paste** — a copied Excel block pasted into the + row
+    becomes rows: confirmed with count, auto-inc columns skipped, empty
+    cells NULL, ONE journaled INSERT (= one Ctrl+Z). parseTSV shares the
+    quoted-field parser with CSV.
+44. **Diagram → .svg** — buildDiagramSvg renders the arranged canvas (cards,
+    PK/FK tags, types, bezier lines) standalone on white; '⇪ svg' in the bar.
+45. **Excel everywhere** — xlsx.js: dependency-free .xlsx writer (STORED zip
+    hand-built, CRCs verified against zlib in test-xlsx; export_write_b64
+    Rust command with a vector-tested base64 decoder). '⇪ excel' on every
+    grid; Settings → whole database as ONE workbook, sheet per table,
+    parents before dependents.
+46. **Global search** — 'find in all tables…' in the ⊞ bar; per-table hit
+    chips; click/Enter opens the grid pre-filtered (openTableGrid carries a
+    filter; grids accept initialFilter).
+
 ## Deliberately NOT done (needs Ben)
 
 - P9 external-server deploy (connection manager, credentials) — too much
